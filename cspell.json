@@ -1,0 +1,31 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "acodec",
+    "bestaudio",
+    "bestvideo",
+    "btch",
+    "cdninstagram",
+    "DCIM",
+    "fbcdn",
+    "googlevideo",
+    "igdl",
+    "IGDL",
+    "itag",
+    "kbps",
+    "KHTML",
+    "vcodec",
+    "youtu",
+    "ytdlp",
+    "Ytdlp"
+  ],
+  "ignorePaths": [
+    "node_modules/**",
+    "android/**",
+    ".expo/**",
+    "*.apk",
+    "package-lock.json",
+    "yt-dlp.exe"
+  ]
+}

@@ -41,3 +41,15 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Server-side binaries (not needed in mobile app)
+yt-dlp.exe
+yt-dlp
+
+# Build outputs
+app-release.apk
+*.apk
+
+# Backend logs
+backend.log
+expo.log

@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -p \"typeof __dirname\")",
+      "Bash(node -e \"const btch = require\\(''btch-downloader''\\); console.log\\(''Methods:'', Object.keys\\(btch\\).join\\('', ''\\)\\);\")",
+      "Bash(ls -la test*.js)",
+      "Bash(npx eslint:*)",
+      "Bash(cd:*)",
+      "Bash(node -c server.js)",
+      "Bash(npx tsc:*)",
+      "Bash(timeout 5 node server.js)",
+      "Bash(timeout 3 node server.js)",
+      "Bash(rm -f constants/theme.ts)",
+      "Bash(rmdir constants:*)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :3000)",
+      "Bash(npm run:*)",
+      "Bash(npx expo:*)",
+      "Bash(curl http://localhost:3000)",
+      "Bash(curl -s http://localhost:8081)",
+      "Bash(curl -s http://localhost:8081/status)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(taskkill //F //PID 1377)",
+      "Bash(tasklist //FI 'IMAGENAME eq node.exe')",
+      "Bash(findstr node.exe)",
+      "Bash(adb shell:*)",
+      "Bash(curl -s http://localhost:3000/)"
+    ]
+  }
+}
