@@ -4,7 +4,7 @@ const path = require('path');
 /**
  * Async yt-dlp JSON extraction — non-blocking.
  */
-const ytdlpGetInfoAsync = (url, extraArgs = [], timeoutMs = 45000) => {
+const runYtdlp = (url, extraArgs = [], timeoutMs = 45000) => {
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
     const ytdlpPath = path.resolve(__dirname, '..', '..', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
@@ -24,15 +24,89 @@ const ytdlpGetInfoAsync = (url, extraArgs = [], timeoutMs = 45000) => {
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        const errMsg = stderr.trim().split('\n').pop() || `yt-dlp exited with code ${code}`;
+        const errMsg = stderr.trim() || `yt-dlp exited with code ${code}`;
         return reject(new Error(errMsg));
       }
-      try { resolve(JSON.parse(stdout.trim())); }
-      catch { reject(new Error('Failed to parse yt-dlp output')); }
+      try {
+        const lines = stdout.trim().split('\n').filter(l => l.trim());
+        if (lines.length === 1) {
+          resolve(JSON.parse(lines[0]));
+        } else {
+          const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+          if (entries.length === 1) resolve(entries[0]);
+          else resolve({ _type: 'multi', entries });
+        }
+      } catch { reject(new Error('Failed to parse yt-dlp output')); }
     });
 
     proc.on('error', (err) => { clearTimeout(timer); reject(err); });
   });
+};
+
+/**
+ * Async yt-dlp JSON extraction with cookie fallbacks.
+ */
+const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 45000) => {
+  try {
+    return await runYtdlp(url, extraArgs, timeoutMs);
+  } catch (err) {
+    const msg = err.message ? err.message.toLowerCase() : '';
+    const needsAuth = msg && (
+      msg.includes('login') ||
+      msg.includes('cookies') ||
+      msg.includes('authentication') ||
+      msg.includes('private') ||
+      msg.includes('empty media response') ||
+      msg.includes('no video') ||
+      msg.includes('instagram api is not granting access') ||
+      msg.includes('404') ||
+      msg.includes('403') ||
+      msg.includes('401') ||
+      msg.includes('unauthorized') ||
+      msg.includes('forbidden') ||
+      msg.includes('not found')
+    );
+    if (!needsAuth) throw err;
+
+    console.log('[yt-dlp] Retrying with browser cookies...');
+    const browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera'];
+    let lastErr = err;
+    
+    for (const browser of browsers) {
+      console.log(`[yt-dlp] Trying cookies from ${browser}...`);
+      try {
+        return await runYtdlp(url, ['--cookies-from-browser', browser, ...extraArgs], timeoutMs);
+      } catch (cookieErr) {
+        lastErr = cookieErr;
+        const cMsg = cookieErr.message ? cookieErr.message.toLowerCase() : '';
+        const stillNeedsAuth = cMsg && (
+          cMsg.includes('could not copy') ||
+          cMsg.includes('could not find') ||
+          cMsg.includes('login') ||
+          cMsg.includes('cookies') ||
+          cMsg.includes('authentication') ||
+          cMsg.includes('private') ||
+          cMsg.includes('registered users') ||
+          cMsg.includes('empty media response') ||
+          cMsg.includes('no video') ||
+          cMsg.includes('instagram api is not granting access') ||
+          cMsg.includes('404') ||
+          cMsg.includes('403') ||
+          cMsg.includes('401') ||
+          cMsg.includes('unauthorized') ||
+          cMsg.includes('forbidden') ||
+          cMsg.includes('not found')
+        );
+        if (stillNeedsAuth) {
+          continue;
+        }
+        throw cookieErr;
+      }
+    }
+    
+    // If all browsers failed, throw the last relevant error
+    throw lastErr;
+  }
 };
 
 /**
@@ -61,8 +135,13 @@ const extractYouTube = async (url) => {
     const formats = info.formats || [];
     const heights = [2160, 1440, 1080, 720, 480, 360];
 
-    heights.forEach((h) => {
-      const f = formats.find((fmt) => fmt.height === h && fmt.vcodec !== 'none');
+    const preMergedFormats = formats.filter(fmt => fmt.vcodec !== 'none' && fmt.acodec !== 'none');
+    preMergedFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
+
+    const uniqueHeights = [...new Set(preMergedFormats.map(f => f.height))];
+
+    uniqueHeights.forEach((h) => {
+      const f = preMergedFormats.find((fmt) => fmt.height === h);
       if (f) {
         const label = h >= 2160 ? '4K' : h >= 1440 ? '2K' : h >= 1080 ? 'Full HD' : h >= 720 ? 'HD' : 'SD';
         options.push({
@@ -72,7 +151,7 @@ const extractYouTube = async (url) => {
           url: '',
           ytId: videoId,
           itag: f.format_id,
-          note: f.acodec === 'none' ? 'Video only — audio will be merged' : '',
+          note: 'Includes Sound',
           useProxy: true,
         });
       }
@@ -83,20 +162,22 @@ const extractYouTube = async (url) => {
       options.push({
         quality: 'Best Available',
         size: 'Auto', format: 'MP4', url: '',
-        ytId: videoId, itag: 'bestvideo+bestaudio/best', useProxy: true,
+        ytId: videoId, itag: 'best', useProxy: true,
       });
     }
 
     // Audio
     const bestAudio = formats
-      .filter((f) => f.vcodec === 'none' && f.acodec !== 'none')
+      .filter((f) => f.vcodec === 'none' && f.acodec !== 'none' && f.ext === 'm4a')
+      .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0] || 
+      formats.filter((f) => f.vcodec === 'none' && f.acodec !== 'none')
       .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
 
     if (bestAudio) {
       options.push({
         quality: `Audio Only (${Math.round(bestAudio.abr || 128)}kbps)`,
         size: bestAudio.filesize ? (bestAudio.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
-        format: 'MP3',
+        format: 'M4A',
         url: '',
         ytId: videoId,
         itag: bestAudio.format_id,

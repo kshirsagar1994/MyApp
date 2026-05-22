@@ -9,6 +9,8 @@ module.exports = function (api) {
     plugins.push('transform-remove-console');
   }
 
+  plugins.push('react-native-reanimated/plugin');
+
   return {
     presets: ['babel-preset-expo'],
     plugins,

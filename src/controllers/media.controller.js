@@ -3,8 +3,6 @@ const { extractInstagram } = require('../extractors/instagram');
 const { extractFacebook } = require('../extractors/facebook');
 const { extractSnapchat } = require('../extractors/snapchat');
 const { extractLinkedIn } = require('../extractors/linkedin');
-const { extractTikTok } = require('../extractors/tiktok');
-const { extractWhatsApp } = require('../extractors/whatsapp');
 
 // Helper to determine the platform dynamically from the URL
 const detectPlatform = (url) => {
@@ -12,10 +10,8 @@ const detectPlatform = (url) => {
   if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube';
   if (u.includes('instagram.com')) return 'instagram';
   if (u.includes('facebook.com') || u.includes('fb.watch')) return 'facebook';
-  if (u.includes('tiktok.com')) return 'tiktok';
   if (u.includes('snapchat.com')) return 'snapchat';
   if (u.includes('linkedin.com')) return 'linkedin';
-  if (u.includes('whatsapp.com') || u.includes('wa.me')) return 'whatsapp';
   return 'unknown';
 };
 
@@ -40,20 +36,14 @@ const analyzeUrl = async (req, res) => {
       case 'facebook':
         result = await extractFacebook(url);
         break;
-      case 'tiktok':
-        result = await extractTikTok(url);
-        break;
       case 'snapchat':
         result = await extractSnapchat(url);
         break;
       case 'linkedin':
         result = await extractLinkedIn(url);
         break;
-      case 'whatsapp':
-        result = await extractWhatsApp(url);
-        break;
       default:
-        result = { success: false, error: `Unsupported platform. Supported: YouTube, Instagram, Facebook, TikTok, Snapchat, LinkedIn, WhatsApp.` };
+        result = { success: false, error: `Unsupported platform. Supported: YouTube, Instagram, Facebook, Snapchat, LinkedIn.` };
     }
 
     if (!result.success) {

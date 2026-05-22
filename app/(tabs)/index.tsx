@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Platform, Image, useColorScheme, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
+
 import { LinearGradient } from 'expo-linear-gradient';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -57,7 +57,7 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
 // Set this to your PC's local network IP address.
 // Find it by running 'ipconfig' (Windows) or 'ifconfig' (Mac/Linux)
 // Your phone and PC must be on the SAME Wi-Fi network.
-const SERVER_IP = '192.168.137.1'; // <-- Change this to your PC's IP
+const SERVER_IP = '10.96.88.155'; // <-- Updated to your actual Wi-Fi IP
 const SERVER_PORT = '3000';
 
 /** Resolves the backend server base URL */
@@ -93,14 +93,20 @@ export default function HomeScreen() {
   // ── PERFORMANCE: Throttle ref to prevent download progress from firing
   // 30-60 times/sec — limits to max 3 updates/sec (saves ~90% re-renders)
   const lastProgressUpdate = useRef<Record<string, number>>({});
+  
+  // ── DOWNLOAD CONTROL: Store resumable instances to allow pause/cancel
+  const downloadTasks = useRef<Record<string, any>>({});
 
   /** Save a completed file to MediaLibrary (gallery + file manager) */
   const saveToGalleryAndStorage = useCallback(async (fileUri: string, fileName: string, finalExt: string) => {
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
+      const mimeType = finalExt === '.jpg' ? 'image/jpeg' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'audio/mp4' : 'video/mp4';
+      const UTI = finalExt === '.jpg' ? 'public.jpeg' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'public.mpeg-4-audio' : 'public.mpeg-4';
+
       if (status !== 'granted') {
         // Permission denied — use share sheet as fallback
-        await Sharing.shareAsync(fileUri);
+        await Sharing.shareAsync(fileUri, { mimeType, UTI });
         return;
       }
 
@@ -115,12 +121,16 @@ export default function HomeScreen() {
         await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
       }
 
-      const typeLabel = finalExt === '.jpg' ? 'Photo' : finalExt === '.mp3' ? 'Audio' : 'Video';
+      const typeLabel = finalExt === '.jpg' ? 'Photo' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'Audio' : 'Video';
       Alert.alert('Download Complete ✅', `${typeLabel} saved!\n\nFind it in:\n• Gallery → "MyApp" album\n• File Manager → DCIM/MyApp`);
     } catch (e: any) {
       console.log('MediaLibrary Error:', e.message);
       // Ultimate fallback: share dialog which has "Save to Files"
-      try { await Sharing.shareAsync(fileUri); } catch (_) {}
+      try { 
+        const mimeType = finalExt === '.jpg' ? 'image/jpeg' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'audio/mp4' : 'video/mp4';
+        const UTI = finalExt === '.jpg' ? 'public.jpeg' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'public.mpeg-4-audio' : 'public.mpeg-4';
+        await Sharing.shareAsync(fileUri, { mimeType, UTI }); 
+      } catch (_) {}
     }
   }, []);
 
@@ -136,21 +146,38 @@ export default function HomeScreen() {
 
     // Determine file extension
     let finalExt = '.mp4';
-    const isAudioOption = opt.isAudio || opt.format === 'MP3' || opt.quality?.toLowerCase().includes('audio');
-    if (isAudioOption) finalExt = '.mp3';
-    else if (typeOverride === 'image' || opt.isImage || opt.quality?.toLowerCase().includes('photo')) finalExt = '.jpg';
-    else finalExt = '.mp4';
+    // We force audio to save as .mp4 because Expo MediaLibrary on Android strictly 
+    // rejects .m4a/.mp3 files when saving to generic albums like DCIM.
+    // It will play perfectly as an audio-only video.
+    const isAudioOption = opt.isAudio || opt.format === 'MP3' || opt.format === 'M4A' || opt.quality?.toLowerCase().includes('audio');
+    if (typeOverride === 'image' || opt.isImage || opt.quality?.toLowerCase().includes('photo')) {
+      finalExt = '.jpg';
+    } else {
+      finalExt = '.mp4'; 
+    }
 
-    // Clean filename
-    const uniqueId = Math.floor(Math.random() * 10000);
-    const cleanTitle = (result?.title || 'Media').replace(/[^\w]/g, "");
-    const fileName = `${cleanTitle?.substring(0, 20) || 'Media'}_${uniqueId}${finalExt}`;
+    // Clean filename (preserve spaces, remove only invalid filename characters)
+    let baseName = opt.title || result?.title || 'Media';
+    if (opt.isPlaylist === false || opt.ytId) {
+       // If it's a playlist item, the title might be inside opt.quality as "1. Title"
+       if (opt.quality && !opt.quality.includes('Entire Playlist')) {
+         baseName = opt.quality.replace(/^\d+\.\s*/, '');
+       }
+    }
+    
+    let cleanTitle = baseName.replace(/[/\\?%*:|"<>]/g, '-').trim();
+    if (cleanTitle.length > 50) cleanTitle = cleanTitle.substring(0, 50).trim();
+    if (!cleanTitle) cleanTitle = 'Media';
+    
+    const uniqueId = Math.floor(Math.random() * 100000);
+    const fileName = `${cleanTitle}_${uniqueId}${finalExt}`;
 
     const newDownload = {
       id: Date.now().toString(),
       title: opt.quality?.substring(0, 50) || fileName,
       progress: 0,
       speed: 'Starting...',
+      isPaused: false,
     };
     setActiveDownloads(prev => [...prev, newDownload]);
 
@@ -247,15 +274,22 @@ export default function HomeScreen() {
         const progress = totalExpected > 0 ? Math.round((totalWritten / totalExpected) * 100) : -1;
         const speed = (totalWritten / 1024 / 1024).toFixed(2) + ' MB';
         setActiveDownloads(prev => prev.map(d =>
-          d.id === newDownload.id
+          d.id === newDownload.id && !d.isPaused
             ? { ...d, progress: progress >= 0 ? progress : 0, speed: progress >= 0 ? `${speed} (${progress}%)` : `${speed} downloaded` }
             : d
         ));
       }
     );
 
+    downloadTasks.current[newDownload.id] = downloadResumable;
+
     try {
       const downloadResult = await downloadResumable.downloadAsync();
+      
+      // If it was cancelled, the task is removed from activeDownloads already, so just return
+      if (!downloadTasks.current[newDownload.id]) return;
+
+      delete downloadTasks.current[newDownload.id];
       setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
       
       if (downloadResult && downloadResult.status === 200 && downloadResult.uri) {
@@ -270,7 +304,7 @@ export default function HomeScreen() {
             id: newDownload.id,
             title: fileName,
             status: 'completed',
-            type: finalExt === '.jpg' ? 'image' : finalExt === '.mp3' ? 'music' : 'video',
+            type: finalExt === '.jpg' ? 'image' : isAudioOption ? 'music' : 'video',
             size: opt.size || 'HQ',
             uri: downloadResult.uri,
           };
@@ -284,9 +318,38 @@ export default function HomeScreen() {
       }
     } catch (e: any) {
       console.error(e);
-      Alert.alert('Download Failed ❌', e.message || 'Unknown error');
-      setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
+      if (downloadTasks.current[newDownload.id]) {
+        Alert.alert('Download Failed ❌', e.message || 'Unknown error');
+        delete downloadTasks.current[newDownload.id];
+        setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
+      }
     }
+  };
+
+  const handlePauseResume = async (id: string, isPaused: boolean) => {
+    const task = downloadTasks.current[id];
+    if (!task) return;
+    try {
+      if (isPaused) {
+        setActiveDownloads(prev => prev.map(d => d.id === id ? { ...d, isPaused: false, speed: 'Resuming...' } : d));
+        await task.resumeAsync();
+      } else {
+        setActiveDownloads(prev => prev.map(d => d.id === id ? { ...d, isPaused: true, speed: 'Paused' } : d));
+        await task.pauseAsync();
+      }
+    } catch (e) {
+      console.log('Pause/Resume Error', e);
+    }
+  };
+
+  const handleCancel = async (id: string) => {
+    const task = downloadTasks.current[id];
+    if (!task) return;
+    try {
+      await task.cancelAsync();
+    } catch (e) {}
+    delete downloadTasks.current[id];
+    setActiveDownloads(prev => prev.filter(d => d.id !== id));
   };
 
   /** Download all items from a playlist individually */
@@ -312,10 +375,8 @@ export default function HomeScreen() {
     if (urlLower.includes('youtube.com') || urlLower.includes('youtu.be')) return { name: 'logo-youtube' as any, color: '#FF0000', platform: 'youtube' };
     if (urlLower.includes('instagram.com')) return { name: 'logo-instagram' as any, color: '#E1306C', platform: 'instagram' };
     if (urlLower.includes('facebook.com') || urlLower.includes('fb.watch')) return { name: 'logo-facebook' as any, color: '#1877F2', platform: 'facebook' };
-    if (urlLower.includes('tiktok.com')) return { name: 'logo-tiktok' as any, color: '#00F2EA', platform: 'tiktok' };
     if (urlLower.includes('linkedin.com')) return { name: 'logo-linkedin' as any, color: '#0077B5', platform: 'linkedin' };
     if (urlLower.includes('snapchat.com')) return { name: 'logo-snapchat' as any, color: '#E6C200', platform: 'snapchat' };
-    if (urlLower.includes('whatsapp.com') || urlLower.includes('wa.me')) return { name: 'logo-whatsapp' as any, color: '#25D366', platform: 'whatsapp' };
     return { name: 'link-outline' as any, color: '#00E5FF', platform: 'web' };
   }, [url]);
 
@@ -376,14 +437,12 @@ export default function HomeScreen() {
             <Ionicons name="logo-youtube" size={26} color="#FF0000" />
             <Ionicons name="logo-instagram" size={26} color="#E1306C" />
             <Ionicons name="logo-facebook" size={26} color="#1877F2" />
-            <Ionicons name="logo-tiktok" size={26} color="#00F2EA" />
             <Ionicons name="logo-linkedin" size={26} color="#0077B5" />
             <Ionicons name="logo-snapchat" size={26} color="#E6C200" />
-            <Ionicons name="logo-whatsapp" size={26} color="#25D366" />
           </View>
         </View>
 
-        <BlurView intensity={isDark ? 30 : 50} style={styles.inputCard}>
+        <View style={[styles.inputCard, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]}>
           <Ionicons name={platformInfo.name} size={24} color={platformInfo.color} style={styles.inputIcon} />
           <TextInput
             style={[styles.input, { color: themeColors.text }]}
@@ -397,7 +456,7 @@ export default function HomeScreen() {
               <Ionicons name="close-circle" size={20} color="#999" />
             </TouchableOpacity>
           )}
-        </BlurView>
+        </View>
 
         <TouchableOpacity 
           style={[styles.mainBtn, analyzing && { opacity: 0.7 }]} 
@@ -450,7 +509,17 @@ export default function HomeScreen() {
                 <View style={styles.progressBar}>
                   <View style={[styles.progressFill, { width: d.progress >= 0 ? `${d.progress}%` : '50%' }]} />
                 </View>
-                <Text style={styles.progressSpeed}>{d.speed}</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                  <Text style={styles.progressSpeed}>{d.speed}</Text>
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity onPress={() => handlePauseResume(d.id, d.isPaused)} style={styles.controlBtn}>
+                      <Ionicons name={d.isPaused ? "play" : "pause"} size={18} color={themeColors.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => handleCancel(d.id)} style={styles.controlBtn}>
+                      <Ionicons name="close" size={20} color="#EF4444" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </View>
             ))}
           </View>
@@ -567,5 +636,6 @@ const styles = StyleSheet.create({
   progressPercent: { color: '#3B82F6', fontSize: 13, fontWeight: '800' },
   progressBar: { height: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: '#3B82F6', borderRadius: 3 },
-  progressSpeed: { fontSize: 11, color: '#8FA1B3', marginTop: 6 },
+  progressSpeed: { fontSize: 11, color: '#8FA1B3' },
+  controlBtn: { padding: 4, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 8 },
 });

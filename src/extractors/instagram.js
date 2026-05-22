@@ -15,57 +15,71 @@ const extractInstagram = async (url) => {
       const info = await ytdlpGetInfoAsync(url, [], 45000);
 
       const title = info.title || 'Instagram Post/Reel';
-      const thumbnail = info.thumbnail || '';
-      const formats = info.formats || [];
-      const directUrl = info.url;
+      const thumbnail = info.thumbnail || (info.entries && info.entries[0]?.thumbnail) || '';
+      
+      const entries = info.entries ? info.entries : [info];
+      let vCount = 0;
+      let pCount = 0;
 
-      if (formats.length > 0) {
-        // Video formats
+      entries.forEach((entry) => {
+        const formats = entry.formats || [];
+        const directUrl = entry.url;
+        
+        // Determine if it's explicitly an image
+        const ext = (entry.ext || '').toLowerCase();
+        const isExplicitImage = ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'webp' || 
+                               (directUrl && directUrl.match(/\.(jpg|jpeg|png|webp)(\?|$)/i)) ||
+                               (entry.vcodec === 'none' && entry.acodec === 'none');
+
         const videoFormats = formats
-          .filter(f => f.vcodec !== 'none')
-          .sort((a, b) => ((b.height || 0) * 1000 + (b.tbr || 0)) - ((a.height || 0) * 1000 + (a.tbr || 0)));
+            .filter(f => f.vcodec !== 'none' && f.vcodec !== 'images' && f.ext !== 'mhtml')
+            .sort((a, b) => ((b.height || 0) * 1000 + (b.tbr || 0)) - ((a.height || 0) * 1000 + (a.tbr || 0)));
 
-        const seenHeights = new Set();
-        for (const f of videoFormats) {
-          const h = f.height || 0;
-          if (seenHeights.has(h)) continue;
-          seenHeights.add(h);
-          const label = h >= 1080 ? 'Full HD' : h >= 720 ? 'HD' : h >= 480 ? 'SD' : 'Low';
-          options.push({
-            quality: `Video ${label} (${h}p)`,
-            size: f.filesize ? (f.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
-            format: 'MP4',
-            url: f.url || '',
-            useProxy: !!f.url,
-          });
-          if (options.length >= 3) break;
+        if (videoFormats.length > 0 && !isExplicitImage) {
+            const bestVideo = videoFormats[0];
+            vCount++;
+            options.push({
+              quality: `HD Video ${entries.length > 1 ? vCount : ''}`.trim(),
+              size: bestVideo.filesize ? (bestVideo.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+              format: 'MP4',
+              url: bestVideo.url,
+              useProxy: true,
+            });
+            options.push({
+              quality: `Audio Only ${entries.length > 1 ? vCount : ''}`.trim(),
+              size: 'Auto',
+              format: 'M4A',
+              url: bestVideo.url,
+              isAudio: true,
+              useProxy: true,
+            });
+            // Also provide the thumbnail as an image option for videos
+            if (entry.thumbnail || directUrl) {
+              pCount++;
+              options.push({
+                quality: `High Res Photo ${entries.length > 1 ? pCount : ''}`.trim(),
+                size: 'Auto',
+                format: 'JPG',
+                url: entry.thumbnail || directUrl,
+                isImage: true,
+                imageUrl: entry.thumbnail || directUrl,
+                useProxy: true,
+              });
+            }
+        } else if (directUrl) {
+           // No video formats found or explicitly an image
+           pCount++;
+           options.push({
+             quality: `High Res Photo ${entries.length > 1 ? pCount : ''}`.trim(),
+             size: 'Auto',
+             format: ext === 'webp' ? 'WEBP' : 'JPG',
+             url: directUrl,
+             isImage: true,
+             imageUrl: directUrl || entry.thumbnail,
+             useProxy: true,
+           });
         }
-
-        // Audio
-        const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none');
-        if (audioFormats.length > 0) {
-          const best = audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-          options.push({
-            quality: `Audio Only (${Math.round(best.abr || 128)}kbps)`,
-            size: 'Auto', format: 'MP3',
-            url: best.url || '', isAudio: true, useProxy: !!best.url,
-          });
-        }
-      }
-
-      // Direct URL (single photo/video)
-      if (options.length === 0 && directUrl) {
-        const isImage = directUrl.match(/\.(jpg|jpeg|png|webp)/i);
-        options.push({
-          quality: isImage ? 'High Res Photo' : 'HD Video',
-          size: 'Auto',
-          format: isImage ? 'JPG' : 'MP4',
-          url: directUrl,
-          isImage: !!isImage,
-          imageUrl: isImage ? directUrl : thumbnail,
-          useProxy: true,
-        });
-      }
+      });
 
       if (options.length > 0) {
         return {
@@ -83,21 +97,58 @@ const extractInstagram = async (url) => {
       const igRes = await withTimeout(btch.igdl(url), 12000, 'Instagram IGDL');
 
       if (igRes && Array.isArray(igRes.result) && igRes.result.length > 0) {
+        let vCount = 0;
+        let pCount = 0;
         igRes.result.forEach((item) => {
           const mediaItems = item.media && Array.isArray(item.media) ? item.media : [item];
           mediaItems.forEach((m) => {
-            const mUrl = m.url || m.download_link;
+            const mUrl = typeof m === 'string' ? m : (m.url || m.download_link);
             if (!mUrl) return;
-            const isImage = mUrl.includes('.jpg') || mUrl.includes('.jpeg') || mUrl.includes('.png');
-            options.push({
-              quality: isImage ? 'High Res Photo' : 'HD Video',
-              size: 'Auto',
-              format: isImage ? 'JPG' : 'MP4',
-              url: mUrl,
-              imageUrl: m.thumbnail || (isImage ? mUrl : null),
-              isImage,
-              useProxy: true,
-            });
+            
+            let decodedUrl = mUrl;
+            if (mUrl.includes('token=')) {
+              try {
+                const token = mUrl.split('token=')[1].split('&')[0];
+                const payload = token.split('.')[1];
+                if (payload) {
+                   const decoded = Buffer.from(payload, 'base64').toString('utf-8');
+                   const parsed = JSON.parse(decoded);
+                   if (parsed.url) decodedUrl = parsed.url;
+                }
+              } catch (e) {}
+            }
+            
+            const isImage = decodedUrl.match(/\.(jpg|jpeg|png|webp)/i);
+            
+            if (isImage) {
+              pCount++;
+              options.push({
+                quality: `High Res Photo ${mediaItems.length > 1 || igRes.result.length > 1 ? pCount : ''}`.trim(),
+                size: 'Auto', format: 'JPG', url: mUrl,
+                imageUrl: m.thumbnail || (typeof m !== 'string' ? mUrl : null),
+                isImage: true, useProxy: true,
+              });
+            } else {
+              vCount++;
+              options.push({
+                quality: `HD Video ${mediaItems.length > 1 || igRes.result.length > 1 ? vCount : ''}`.trim(),
+                size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+                imageUrl: m.thumbnail || null,
+              });
+              options.push({
+                quality: `Audio Only ${mediaItems.length > 1 || igRes.result.length > 1 ? vCount : ''}`.trim(),
+                size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+                imageUrl: m.thumbnail || null,
+              });
+              if (m.thumbnail) {
+                pCount++;
+                options.push({
+                  quality: `High Res Photo ${mediaItems.length > 1 || igRes.result.length > 1 ? pCount : ''}`.trim(),
+                  size: 'Auto', format: 'JPG', url: m.thumbnail,
+                  imageUrl: m.thumbnail, isImage: true, useProxy: true,
+                });
+              }
+            }
           });
         });
       }
@@ -111,19 +162,55 @@ const extractInstagram = async (url) => {
         console.log('[Instagram] FALLBACK: btch AIO...');
         const aioRes = await withTimeout(btch.aio(url), 12000, 'Instagram AIO');
         if (aioRes && aioRes.data) {
+          let vCount = 0;
+          let pCount = 0;
           const items = Array.isArray(aioRes.data) ? aioRes.data : [aioRes.data];
           items.forEach(item => {
             const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
             if (!mUrl || !mUrl.startsWith('http')) return;
-            const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
-            options.push({
-              quality: isImage ? 'Photo' : 'Video',
-              size: 'Auto',
-              format: isImage ? 'JPG' : 'MP4',
-              url: mUrl,
-              isImage: !!isImage,
-              useProxy: true,
-            });
+            
+            let decodedUrl = mUrl;
+            if (mUrl.includes('token=')) {
+              try {
+                const token = mUrl.split('token=')[1].split('&')[0];
+                const payload = token.split('.')[1];
+                if (payload) {
+                   const decoded = Buffer.from(payload, 'base64').toString('utf-8');
+                   const parsed = JSON.parse(decoded);
+                   if (parsed.url) decodedUrl = parsed.url;
+                }
+              } catch (e) {}
+            }
+            
+            const isImage = decodedUrl.match(/\.(jpg|jpeg|png|webp)/i);
+            if (isImage) {
+              pCount++;
+              options.push({
+                quality: `High Res Photo ${items.length > 1 ? pCount : ''}`.trim(),
+                size: 'Auto', format: 'JPG', url: mUrl, isImage: true, useProxy: true,
+                imageUrl: item.thumbnail || (typeof item !== 'string' ? mUrl : null),
+              });
+            } else {
+              vCount++;
+              options.push({
+                quality: `HD Video ${items.length > 1 ? vCount : ''}`.trim(),
+                size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+                imageUrl: item.thumbnail || null,
+              });
+              options.push({
+                quality: `Audio Only ${items.length > 1 ? vCount : ''}`.trim(),
+                size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+                imageUrl: item.thumbnail || null,
+              });
+              if (item.thumbnail) {
+                pCount++;
+                options.push({
+                  quality: `High Res Photo ${items.length > 1 ? pCount : ''}`.trim(),
+                  size: 'Auto', format: 'JPG', url: item.thumbnail,
+                  imageUrl: item.thumbnail, isImage: true, useProxy: true,
+                });
+              }
+            }
           });
         }
       } catch (e) {
@@ -132,13 +219,15 @@ const extractInstagram = async (url) => {
     }
 
     if (options.length > 0) {
+    if (options.length > 0) {
       return {
         success: true,
-        data: { type: 'mixed', title: 'Instagram Post/Reel', options },
+        data: { type: options.every(o => o.isImage) ? 'image' : 'mixed', title: 'Instagram Post/Reel', options },
       };
     }
+    }
 
-    throw new Error('All Instagram extractors failed. The content may be private or the URL is invalid.');
+    throw new Error('All Instagram extractors failed or no valid options were found for this URL type.');
 
   } catch (error) {
     console.error('[Instagram Extractor] Error:', error.message);

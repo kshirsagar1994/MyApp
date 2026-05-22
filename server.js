@@ -77,17 +77,24 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 45000) => {
       err.message.includes('cookies') ||
       err.message.includes('authentication') ||
       err.message.includes('private') ||
-      err.message.includes('empty media response')
+      err.message.includes('empty media response') ||
+      err.message.includes('no video') ||
+      err.message.includes('Instagram API is not granting access')
     );
     if (!needsAuth) throw err;
 
     // Retry with browser cookies for authenticated content
-    console.log('[yt-dlp] Retrying with browser cookies...');
+    console.log('[yt-dlp] Retrying with browser cookies (Chrome)...');
     try {
       return await runYtdlp(url, ['--cookies-from-browser', 'chrome', ...extraArgs], timeoutMs);
     } catch (cookieErr) {
-      if (cookieErr.message?.includes('Could not copy')) throw err;
-      throw cookieErr;
+      console.log('[yt-dlp] Chrome cookies failed, trying Edge...');
+      try {
+        return await runYtdlp(url, ['--cookies-from-browser', 'edge', ...extraArgs], timeoutMs);
+      } catch (edgeErr) {
+        if (edgeErr.message?.includes('Could not copy')) throw err;
+        throw edgeErr;
+      }
     }
   }
 };
@@ -146,7 +153,7 @@ try {
 const { analyzeUrl: modularAnalyze } = require('./src/controllers/media.controller');
 
 app.get('/', (_req, res) => {
-  res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'tiktok', 'linkedin', 'snapchat', 'whatsapp'] });
+  res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'linkedin', 'snapchat'] });
 });
 
 // ===================== ANALYZE ENDPOINT =====================
@@ -177,7 +184,7 @@ app.post('/api/media/analyze', async (req, res) => {
     }
   }
 
-  // All other URLs → modular controller (YouTube single, IG, FB, TikTok, Snap, LinkedIn, WhatsApp)
+  // All other URLs → modular controller (YouTube single, IG, FB, Snap, LinkedIn)
   console.log(`\n[Analyze] URL: ${url}`);
   return modularAnalyze(req, res);
 });
@@ -259,23 +266,22 @@ app.get('/api/media/download', async (req, res) => {
         const ytUrl = videoId.startsWith('http') ? videoId : `https://www.youtube.com/watch?v=${videoId}`;
 
         let formatArg;
-        if (itag && itag !== 'bestvideo+bestaudio/best' && itag !== 'bestaudio') {
-          formatArg = `${itag}+bestaudio/best`;
+        if (itag && itag !== 'bestvideo+bestaudio/best' && itag !== 'bestaudio' && itag !== 'best') {
+          formatArg = itag;
         } else if (itag === 'bestaudio' || safeName.endsWith('.mp3') || safeName.endsWith('.m4a')) {
-          formatArg = 'bestaudio';
+          formatArg = 'bestaudio[ext=m4a]/bestaudio';
         } else {
-          formatArg = 'bestvideo+bestaudio/best';
+          formatArg = 'best'; // Best pre-merged format (video+audio)
         }
 
         const isAudio = safeName.endsWith('.mp3') || safeName.endsWith('.m4a');
-        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+        res.setHeader('Content-Type', isAudio ? 'audio/mp4' : 'video/mp4');
         res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
 
         console.log(`[Download] yt-dlp: ${ytUrl} format=${formatArg}`);
 
         const args = [
           '-f', formatArg,
-          '--merge-output-format', isAudio ? 'mp3' : 'mp4',
           '-o', '-',
           '--no-playlist',
           '--no-warnings',
@@ -283,11 +289,8 @@ app.get('/api/media/download', async (req, res) => {
           ytUrl
         ];
 
-        if (isAudio) {
-          args.splice(args.indexOf('-o'), 0, '-x', '--audio-format', 'mp3');
-        }
-
-        const ytProcess = spawn(ytdlpPath, args, { windowsHide: true });
+        const ytProcess = spawn(ytdlpPath, [...args, '--cookies-from-browser', 'chrome'], { windowsHide: true });
+        
         ytProcess.stdout.pipe(res);
         ytProcess.stderr.on('data', (data) => console.log('yt-dlp stderr:', data.toString().trim()));
         ytProcess.on('error', (err) => {
@@ -310,8 +313,7 @@ app.get('/api/media/download', async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
 
       const args = [
-        '-f', isAudio ? 'bestaudio' : 'bestvideo+bestaudio/best',
-        '--merge-output-format', isAudio ? 'mp3' : 'mp4',
+        '-f', isAudio ? 'bestaudio[ext=m4a]/bestaudio' : 'best',
         '-o', '-',
         '--no-warnings', '--no-check-certificates',
         genericUrl
@@ -410,5 +412,5 @@ app.get('/api/media/playlist-items', async (req, res) => {
 const PORT = 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
-  console.log('Supported: YouTube (single + playlists), Instagram, Facebook, TikTok, Snapchat, LinkedIn, WhatsApp');
+  console.log('Supported: YouTube (single + playlists), Instagram, Facebook, Snapchat, LinkedIn');
 });

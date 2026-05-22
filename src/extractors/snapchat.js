@@ -21,22 +21,46 @@ const extractSnapchat = async (url) => {
 
       if (formats.length > 0) {
         const videoFormats = formats
-          .filter(f => f.vcodec !== 'none')
+          .filter(f => f.vcodec !== 'none' && f.vcodec !== 'images')
           .sort((a, b) => ((b.height || 0) * 1000 + (b.tbr || 0)) - ((a.height || 0) * 1000 + (a.tbr || 0)));
 
-        const seenHeights = new Set();
-        for (const f of videoFormats) {
-          const h = f.height || 0;
-          if (seenHeights.has(h)) continue;
-          seenHeights.add(h);
+        if (videoFormats.length > 0) {
+          const bestVideo = videoFormats[0];
+          
           options.push({
-            quality: `Video (${h}p)`,
-            size: f.filesize ? (f.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+            quality: 'HD Video',
+            size: bestVideo.filesize ? (bestVideo.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
             format: 'MP4',
-            url: f.url || '',
-            useProxy: !!f.url,
+            url: bestVideo.url || '',
+            useProxy: !!bestVideo.url,
           });
-          if (options.length >= 3) break;
+
+          // Audio
+          const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none');
+          if (audioFormats.length > 0) {
+            const bestAudio = audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
+            options.push({
+              quality: `Audio Only (${Math.round(bestAudio.abr || 128)}kbps)`,
+              size: 'Auto', format: 'M4A',
+              url: bestAudio.url || '', isAudio: true, useProxy: !!bestAudio.url,
+            });
+          } else {
+            // fallback: push the video url as audio if no separate audio format is found
+            options.push({
+              quality: 'Audio Only',
+              size: 'Auto', format: 'M4A',
+              url: bestVideo.url || '', isAudio: true, useProxy: !!bestVideo.url,
+            });
+          }
+
+          // Image (Thumbnail)
+          if (thumbnail || directUrl) {
+            options.push({
+              quality: 'High Res Photo',
+              size: 'Auto', format: 'JPG',
+              url: thumbnail || directUrl, isImage: true, imageUrl: thumbnail || directUrl, useProxy: true,
+            });
+          }
         }
       }
 
@@ -71,15 +95,28 @@ const extractSnapchat = async (url) => {
           const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
           if (!mUrl) return;
           const isImg = mUrl.split('?')[0].toLowerCase().match(/\.(jpg|jpeg|png|webp)/);
-          options.push({
-            quality: isImg ? 'HD Photo' : 'HD Video',
-            size: 'Auto',
-            format: isImg ? 'JPG' : 'MP4',
-            url: mUrl,
-            imageUrl: isImg ? mUrl : (item.thumbnail || null),
-            isImage: !!isImg,
-            useProxy: true,
-          });
+          
+          if (isImg) {
+            options.push({
+              quality: 'High Res Photo',
+              size: 'Auto', format: 'JPG', url: mUrl, isImage: true, imageUrl: item.thumbnail || mUrl, useProxy: true,
+            });
+          } else {
+            options.push({
+              quality: 'HD Video',
+              size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+            });
+            options.push({
+              quality: 'Audio Only',
+              size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+            });
+            if (item.thumbnail) {
+              options.push({
+                quality: 'High Res Photo',
+                size: 'Auto', format: 'JPG', url: item.thumbnail, isImage: true, imageUrl: item.thumbnail, useProxy: true,
+              });
+            }
+          }
         });
       }
     } catch (e) {
