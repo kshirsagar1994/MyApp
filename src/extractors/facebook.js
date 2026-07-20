@@ -12,7 +12,7 @@ const extractFacebook = async (url) => {
     // 1. PRIMARY: yt-dlp
     try {
       console.log('[Facebook] PRIMARY: yt-dlp extraction...');
-      const info = await ytdlpGetInfoAsync(url, [], 45000);
+      const info = await ytdlpGetInfoAsync(url, [], 20000);
 
       const title = info.title || 'Facebook Media';
       const thumbnail = info.thumbnail || '';
@@ -85,7 +85,7 @@ const extractFacebook = async (url) => {
     // 2. FALLBACK: btch AIO
     try {
       console.log('[Facebook] FALLBACK: btch AIO...');
-      const fbRes = await withTimeout(btch.aio(url), 12000, 'Facebook AIO');
+      const fbRes = await withTimeout(btch.aio(url), 5000, 'Facebook AIO');
 
       if (fbRes && fbRes.data) {
         const items = Array.isArray(fbRes.data) ? fbRes.data : [fbRes.data];

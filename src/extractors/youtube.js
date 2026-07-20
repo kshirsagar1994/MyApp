@@ -1,10 +1,11 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 /**
  * Async yt-dlp JSON extraction — non-blocking.
  */
-const runYtdlp = (url, extraArgs = [], timeoutMs = 45000) => {
+const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
     const ytdlpPath = path.resolve(__dirname, '..', '..', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
@@ -44,68 +45,43 @@ const runYtdlp = (url, extraArgs = [], timeoutMs = 45000) => {
 };
 
 /**
- * Async yt-dlp JSON extraction with cookie fallbacks.
+ * Async yt-dlp JSON extraction with cookie fallback.
+ * FIX Bug 7: Only retry on genuine auth errors. Do NOT retry on 404/403/not-found/dpapi/decrypt
+ * which are not fixable by cookies and waste 20+ seconds.
  */
-const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 45000) => {
+const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000) => {
   try {
     return await runYtdlp(url, extraArgs, timeoutMs);
   } catch (err) {
     const msg = err.message ? err.message.toLowerCase() : '';
+    // Only retry if it's genuinely an auth/login issue
     const needsAuth = msg && (
       msg.includes('login') ||
       msg.includes('cookies') ||
       msg.includes('authentication') ||
       msg.includes('private') ||
       msg.includes('empty media response') ||
-      msg.includes('no video') ||
-      msg.includes('instagram api is not granting access') ||
-      msg.includes('404') ||
-      msg.includes('403') ||
-      msg.includes('401') ||
-      msg.includes('unauthorized') ||
-      msg.includes('forbidden') ||
-      msg.includes('not found')
+      msg.includes('instagram api is not granting access')
     );
     if (!needsAuth) throw err;
 
-    console.log('[yt-dlp] Retrying with browser cookies...');
-    const browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera'];
-    let lastErr = err;
-    
-    for (const browser of browsers) {
-      console.log(`[yt-dlp] Trying cookies from ${browser}...`);
+    // Try cookies.txt file if available (fast, no UAC prompts)
+    const cookiesPath = path.resolve(__dirname, '..', '..', 'cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+      console.log('[yt-dlp] Auth error — retrying with cookies.txt...');
       try {
-        return await runYtdlp(url, ['--cookies-from-browser', browser, ...extraArgs], timeoutMs);
-      } catch (cookieErr) {
-        lastErr = cookieErr;
-        const cMsg = cookieErr.message ? cookieErr.message.toLowerCase() : '';
-        const stillNeedsAuth = cMsg && (
-          cMsg.includes('could not copy') ||
-          cMsg.includes('could not find') ||
-          cMsg.includes('login') ||
-          cMsg.includes('cookies') ||
-          cMsg.includes('authentication') ||
-          cMsg.includes('private') ||
-          cMsg.includes('registered users') ||
-          cMsg.includes('empty media response') ||
-          cMsg.includes('no video') ||
-          cMsg.includes('instagram api is not granting access') ||
-          cMsg.includes('404') ||
-          cMsg.includes('403') ||
-          cMsg.includes('401') ||
-          cMsg.includes('unauthorized') ||
-          cMsg.includes('forbidden') ||
-          cMsg.includes('not found')
-        );
-        if (stillNeedsAuth) {
-          continue;
-        }
-        throw cookieErr;
+        return await runYtdlp(url, ['--cookies', cookiesPath, ...extraArgs], timeoutMs);
+      } catch (cookieTxtErr) {
+        console.error('[yt-dlp] cookies.txt retry failed:', cookieTxtErr.message);
+        throw cookieTxtErr;
       }
     }
     
-    // If all browsers failed, throw the last relevant error
-    throw lastErr;
+    // No cookies.txt and auth required — fail immediately
+    // We intentionally SKIP --cookies-from-browser because recent Chrome/Edge versions 
+    // use App-Bound encryption on Windows, which causes yt-dlp to completely hang 
+    // waiting for UAC prompts or decryption, leading to massive timeouts.
+    throw err;
   }
 };
 
@@ -125,7 +101,7 @@ const withTimeout = (promise, ms, name = 'Operation') => {
 const extractYouTube = async (url) => {
   try {
     console.log('[YouTube Extractor] Extracting:', url);
-    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 45000);
+    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 20000);
 
     const videoId = info.id;
     const title = info.title || 'YouTube Media';
@@ -133,31 +109,50 @@ const extractYouTube = async (url) => {
     const options = [];
 
     const formats = info.formats || [];
-    const heights = [2160, 1440, 1080, 720, 480, 360];
 
-    const preMergedFormats = formats.filter(fmt => fmt.vcodec !== 'none' && fmt.acodec !== 'none');
-    preMergedFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
+    const videoFormats = formats.filter(fmt => fmt.vcodec !== 'none');
+    videoFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
 
-    const uniqueHeights = [...new Set(preMergedFormats.map(f => f.height))];
+    const uniqueHeights = [...new Set(videoFormats.map(f => f.height))];
+
+    // Audio formats for merging with video-only streams
+    const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none');
+
+    // Find best m4a audio for maximum compatibility when merging
+    const bestAudioM4a = audioFormats.find(f => f.ext === 'm4a') || audioFormats[0];
+    const bestAudioId = bestAudioM4a ? bestAudioM4a.format_id : 'bestaudio';
 
     uniqueHeights.forEach((h) => {
-      const f = preMergedFormats.find((fmt) => fmt.height === h);
+      if (!h) return;
+      // Prioritize pre-merged H.264 MP4 streams (have both video+audio)
+      // These stream directly without ffmpeg and play on ALL mobile devices.
+      // Only fall back to video-only if no pre-merged format exists at this height.
+      const f = videoFormats.find((fmt) => fmt.height === h && fmt.acodec !== 'none' && fmt.ext === 'mp4' && fmt.vcodec?.includes('avc1')) ||
+                videoFormats.find((fmt) => fmt.height === h && fmt.acodec !== 'none' && fmt.ext === 'mp4') ||
+                videoFormats.find((fmt) => fmt.height === h && fmt.acodec !== 'none') || 
+                videoFormats.find((fmt) => fmt.height === h && fmt.ext === 'mp4' && fmt.vcodec?.includes('avc1')) ||
+                videoFormats.find((fmt) => fmt.height === h && fmt.ext === 'mp4') ||
+                videoFormats.find((fmt) => fmt.height === h);
+                
       if (f) {
-        const label = h >= 2160 ? '4K' : h >= 1440 ? '2K' : h >= 1080 ? 'Full HD' : h >= 720 ? 'HD' : 'SD';
+        const label = h >= 2160 ? '4K' : h >= 1440 ? '2K' : h >= 1080 ? 'Full HD' : h >= 720 ? 'HD' : h >= 480 ? 'SD' : 'Low';
+        const isMerged = f.acodec !== 'none';
         options.push({
           quality: `Video ${label} (${h}p)`,
-          size: f.filesize ? (f.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+          size: 'Auto',
           format: 'MP4',
           url: '',
           ytId: videoId,
-          itag: f.format_id,
-          note: 'Includes Sound',
+          // If pre-merged (has audio), use single format ID (streams directly, no ffmpeg).
+          // If video-only, combine with best audio → requires ffmpeg merge on server.
+          itag: isMerged ? f.format_id : `${f.format_id}+${bestAudioId}`,
+          note: isMerged ? '' : 'HD/4K (Requires ffmpeg)',
           useProxy: true,
         });
       }
     });
 
-    // Fallback best quality
+    // Fallback best quality — explicitly require audio to prevent black screen
     if (options.length === 0) {
       options.push({
         quality: 'Best Available',
@@ -166,25 +161,45 @@ const extractYouTube = async (url) => {
       });
     }
 
-    // Audio
-    const bestAudio = formats
-      .filter((f) => f.vcodec === 'none' && f.acodec !== 'none' && f.ext === 'm4a')
-      .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0] || 
-      formats.filter((f) => f.vcodec === 'none' && f.acodec !== 'none')
-      .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
+    audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0));
 
-    if (bestAudio) {
+    // Dedup by approx bitrate to offer a few distinct quality options
+    const uniqueAudioOptions = [];
+    const seenBitrates = new Set();
+    
+    for (const f of audioFormats) {
+      if (!f.abr) continue;
+      // Group similar bitrates together (e.g. 130 and 128)
+      const groupKbps = Math.round(f.abr / 16) * 16; 
+      if (!seenBitrates.has(groupKbps) && groupKbps >= 32) {
+        seenBitrates.add(groupKbps);
+        uniqueAudioOptions.push(f);
+      }
+    }
+
+    if (uniqueAudioOptions.length === 0 && audioFormats.length > 0) {
+      uniqueAudioOptions.push(audioFormats[0]); // Fallback if no abr info
+    }
+
+    uniqueAudioOptions.forEach((audioFmt) => {
+      const kbps = Math.round(audioFmt.abr || 128);
+      let qualityLabel = 'Standard';
+      if (kbps >= 256) qualityLabel = 'Premium Quality';
+      else if (kbps >= 128) qualityLabel = 'High Quality';
+      else if (kbps >= 64) qualityLabel = 'Medium Quality';
+      else qualityLabel = 'Low Quality';
+      
       options.push({
-        quality: `Audio Only (${Math.round(bestAudio.abr || 128)}kbps)`,
-        size: bestAudio.filesize ? (bestAudio.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+        quality: `Audio ${qualityLabel} (${kbps}kbps)`,
+        size: audioFmt.filesize ? (audioFmt.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
         format: 'M4A',
         url: '',
         ytId: videoId,
-        itag: bestAudio.format_id,
+        itag: audioFmt.format_id,
         isAudio: true,
         useProxy: true,
       });
-    }
+    });
 
     if (options.length === 0) throw new Error('No formats found for this media.');
 

@@ -4,6 +4,11 @@ const cors = require('cors');
 const { Readable } = require('stream');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+
+// ── Use the SINGLE canonical yt-dlp helpers from youtube.js extractor
+// This eliminates the duplicate runYtdlp/ytdlpGetInfoAsync that existed here before.
+const { ytdlpGetInfoAsync, withTimeout } = require('./src/extractors/youtube');
 
 // ── PERFORMANCE: Hoist btch-downloader at startup instead of lazy-requiring
 // each time a fallback runs (saves ~300ms on first fallback call)
@@ -23,87 +28,16 @@ const getYtdlpPath = () => {
   return path.join(__dirname, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
 };
 
-/**
- * ASYNC yt-dlp JSON extraction — does NOT block the event loop.
- * Tries without cookies first (fast). If auth error, retries with browser cookies.
- */
-const runYtdlp = (url, extraArgs = [], timeoutMs = 45000) => {
-  return new Promise((resolve, reject) => {
-    const ytdlpPath = getYtdlpPath();
-    const args = ['-j', '--no-warnings', '--no-check-certificates', ...extraArgs, url];
-    const proc = spawn(ytdlpPath, args, { windowsHide: true });
-
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      proc.kill('SIGTERM');
-      reject(new Error(`yt-dlp timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        const errMsg = stderr.trim().split('\n').pop() || `yt-dlp exited with code ${code}`;
-        return reject(new Error(errMsg));
-      }
-      try {
-        const lines = stdout.trim().split('\n');
-        if (lines.length === 1) {
-          resolve(JSON.parse(lines[0]));
-        } else {
-          const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-          if (entries.length === 1) resolve(entries[0]);
-          else resolve({ _type: 'multi', entries });
-        }
-      } catch (e) {
-        reject(new Error('Failed to parse yt-dlp output'));
-      }
-    });
-
-    proc.on('error', (err) => { clearTimeout(timer); reject(err); });
-  });
-};
-
-const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 45000) => {
-  // Try without cookies first (fast, works for public content)
-  try {
-    return await runYtdlp(url, extraArgs, timeoutMs);
-  } catch (err) {
-    const needsAuth = err.message && (
-      err.message.includes('login') ||
-      err.message.includes('cookies') ||
-      err.message.includes('authentication') ||
-      err.message.includes('private') ||
-      err.message.includes('empty media response') ||
-      err.message.includes('no video') ||
-      err.message.includes('Instagram API is not granting access')
-    );
-    if (!needsAuth) throw err;
-
-    // Retry with browser cookies for authenticated content
-    console.log('[yt-dlp] Retrying with browser cookies (Chrome)...');
-    try {
-      return await runYtdlp(url, ['--cookies-from-browser', 'chrome', ...extraArgs], timeoutMs);
-    } catch (cookieErr) {
-      console.log('[yt-dlp] Chrome cookies failed, trying Edge...');
-      try {
-        return await runYtdlp(url, ['--cookies-from-browser', 'edge', ...extraArgs], timeoutMs);
-      } catch (edgeErr) {
-        if (edgeErr.message?.includes('Could not copy')) throw err;
-        throw edgeErr;
-      }
-    }
-  }
-};
-
 /** ASYNC playlist extraction */
-const ytdlpGetPlaylistAsync = (url, timeoutMs = 60000) => {
+const ytdlpGetPlaylistAsync = (url, timeoutMs = 30000) => {
   return new Promise((resolve, reject) => {
     const ytdlpPath = getYtdlpPath();
-    const args = ['--flat-playlist', '-J', '--no-warnings', '--no-check-certificates', url];
+    const args = ['--flat-playlist', '-J', '--no-warnings', '--no-check-certificates'];
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+      args.push('--cookies', cookiesPath);
+    }
+    args.push(url);
     const proc = spawn(ytdlpPath, args, { windowsHide: true });
 
     let stdout = '';
@@ -194,7 +128,7 @@ app.post('/api/media/analyze', async (req, res) => {
 async function handleYouTubePlaylist(url, res) {
   try {
     console.log('[YouTube] Extracting playlist...');
-    const playlistInfo = await ytdlpGetPlaylistAsync(url, 60000);
+    const playlistInfo = await ytdlpGetPlaylistAsync(url, 30000);
 
     const playlistTitle = playlistInfo.title || 'YouTube Playlist';
     const entries = playlistInfo.entries || [];
@@ -222,7 +156,7 @@ async function handleYouTubePlaylist(url, res) {
         size: entry.duration ? formatDuration(entry.duration) : 'Auto',
         format: 'MP4', url: '',
         ytId: entry.id || entry.url,
-        itag: 'bestvideo+bestaudio/best',
+        itag: 'best',
         thumbnail: entry.thumbnails?.[0]?.url || '',
         useProxy: true,
       });
@@ -266,41 +200,93 @@ app.get('/api/media/download', async (req, res) => {
         const ytUrl = videoId.startsWith('http') ? videoId : `https://www.youtube.com/watch?v=${videoId}`;
 
         let formatArg;
-        if (itag && itag !== 'bestvideo+bestaudio/best' && itag !== 'bestaudio' && itag !== 'best') {
+        const needsMerge = itag && itag.includes('+');
+
+        if (needsMerge) {
+          // User chose a specific video+audio combo (e.g. 137+140) — needs ffmpeg merge
+          formatArg = itag;
+        } else if (itag && itag !== 'bestvideo+bestaudio/best' && itag !== 'bestaudio' && itag !== 'best') {
+          // Specific single-stream format ID
           formatArg = itag;
         } else if (itag === 'bestaudio' || safeName.endsWith('.mp3') || safeName.endsWith('.m4a')) {
           formatArg = 'bestaudio[ext=m4a]/bestaudio';
         } else {
-          formatArg = 'best'; // Best pre-merged format (video+audio)
+          // FIX Bug 3: Force a pre-merged stream that has BOTH video+audio.
+          // 'best' on modern YouTube can pick video-only DASH streams → black screen.
+          // We require acodec!=none to guarantee audio is present.
+          formatArg = 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best';
         }
 
         const isAudio = safeName.endsWith('.mp3') || safeName.endsWith('.m4a');
         res.setHeader('Content-Type', isAudio ? 'audio/mp4' : 'video/mp4');
         res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
 
-        console.log(`[Download] yt-dlp: ${ytUrl} format=${formatArg}`);
+        console.log(`[Download] yt-dlp: ${ytUrl} format=${formatArg} needsMerge=${needsMerge}`);
 
         const args = [
           '-f', formatArg,
-          '-o', '-',
           '--no-playlist',
           '--no-warnings',
-          '--no-check-certificates',
-          ytUrl
+          '--no-check-certificates'
         ];
-
-        const ytProcess = spawn(ytdlpPath, [...args, '--cookies-from-browser', 'chrome'], { windowsHide: true });
         
-        ytProcess.stdout.pipe(res);
+        let tempFile = null;
+        if (needsMerge) {
+          // FIX Bug 4: Merge to temp file, then stream — yt-dlp can't merge to stdout
+          tempFile = path.join(__dirname, `temp_merge_${Date.now()}_${Math.floor(Math.random() * 1000)}.mp4`);
+          args.push('--merge-output-format', 'mp4', '-o', tempFile);
+        } else {
+          // Single pre-merged stream → pipe directly to response (fast, no temp file)
+          args.push('-o', '-');
+        }
+
+        const cookiesPath = path.join(__dirname, 'cookies.txt');
+        if (fs.existsSync(cookiesPath)) {
+           args.push('--cookies', cookiesPath);
+        }
+        args.push(ytUrl);
+
+        const ytProcess = spawn(ytdlpPath, args, { windowsHide: true });
+        
+        if (!needsMerge) {
+          ytProcess.stdout.pipe(res);
+        }
+        
         ytProcess.stderr.on('data', (data) => console.log('yt-dlp stderr:', data.toString().trim()));
+        
         ytProcess.on('error', (err) => {
           console.error('yt-dlp spawn error:', err.message);
           if (!res.headersSent) res.status(500).json({ error: err.message });
         });
+        
         ytProcess.on('close', (code) => {
-          if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exited with code ${code}` });
+          if (needsMerge) {
+            if (code === 0 && fs.existsSync(tempFile)) {
+              const stat = fs.statSync(tempFile);
+              res.setHeader('Content-Length', stat.size);
+              const readStream = fs.createReadStream(tempFile);
+              readStream.pipe(res);
+              readStream.on('close', () => { try { fs.unlinkSync(tempFile); } catch (e) {} });
+              readStream.on('error', () => {
+                if (!res.headersSent) res.status(500).end();
+                try { fs.unlinkSync(tempFile); } catch (e) {}
+              });
+            } else {
+              if (!res.headersSent) res.status(500).json({ error: `yt-dlp merge failed (code ${code}). Ensure ffmpeg is installed.` });
+              try { if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+            }
+          } else {
+            if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exited with code ${code}` });
+          }
         });
-        req.on('close', () => ytProcess.kill());
+        
+        req.on('close', () => {
+          ytProcess.kill();
+          // Clean up temp file if client disconnects during merge
+          if (tempFile) {
+            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+          }
+        });
         return;
       }
     }
@@ -312,12 +298,17 @@ app.get('/api/media/download', async (req, res) => {
       res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
 
+      // FIX: Use pre-merged format with audio guarantee
       const args = [
-        '-f', isAudio ? 'bestaudio[ext=m4a]/bestaudio' : 'best',
+        '-f', isAudio ? 'bestaudio[ext=m4a]/bestaudio' : 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best',
         '-o', '-',
-        '--no-warnings', '--no-check-certificates',
-        genericUrl
+        '--no-warnings', '--no-check-certificates'
       ];
+      const cookiesPath = path.join(__dirname, 'cookies.txt');
+      if (fs.existsSync(cookiesPath)) {
+         args.push('--cookies', cookiesPath);
+      }
+      args.push(genericUrl);
 
       const proc = spawn(ytdlpPath, args, { windowsHide: true });
       proc.stdout.pipe(res);
@@ -368,18 +359,31 @@ function handlePlaylistDownload(playlistUrl, format, safeName, req, res) {
 
   console.log(`[Playlist Download] ${playlistUrl} format=${format}`);
 
-  const args = [
-    '-f', isAudio ? 'bestaudio' : 'bestvideo+bestaudio/best',
-    '--merge-output-format', isAudio ? 'mp3' : 'mp4',
-    '-o', '-',
-    '--no-warnings', '--no-check-certificates',
-    '--yes-playlist',
-    playlistUrl
-  ];
-
+  let args;
   if (isAudio) {
-    args.splice(2, 0, '-x', '--audio-format', 'mp3');
+    // Audio: extract audio only, convert to mp3. No --merge-output-format needed.
+    args = [
+      '-x', '--audio-format', 'mp3',
+      '-f', 'bestaudio',
+      '-o', '-',
+      '--no-warnings', '--no-check-certificates',
+      '--yes-playlist'
+    ];
+  } else {
+    // Video: use best pre-merged with audio, avoid merge requirement
+    args = [
+      '-f', 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best',
+      '-o', '-',
+      '--no-warnings', '--no-check-certificates',
+      '--yes-playlist'
+    ];
   }
+
+  const cookiesPath = path.join(__dirname, 'cookies.txt');
+  if (fs.existsSync(cookiesPath)) {
+     args.push('--cookies', cookiesPath);
+  }
+  args.push(playlistUrl);
 
   const proc = spawn(ytdlpPath, args, { windowsHide: true });
   proc.stdout.pipe(res);
@@ -395,7 +399,7 @@ app.get('/api/media/playlist-items', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'url param required' });
 
   try {
-    const info = await ytdlpGetPlaylistAsync(url, 60000);
+    const info = await ytdlpGetPlaylistAsync(url, 30000);
     const entries = (info.entries || []).map((e, i) => ({
       index: i + 1,
       id: e.id || e.url,

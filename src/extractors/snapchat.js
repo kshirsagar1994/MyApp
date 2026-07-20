@@ -12,7 +12,7 @@ const extractSnapchat = async (url) => {
     // 1. PRIMARY: yt-dlp
     try {
       console.log('[Snapchat] PRIMARY: yt-dlp extraction...');
-      const info = await ytdlpGetInfoAsync(url, [], 45000);
+      const info = await ytdlpGetInfoAsync(url, [], 20000);
 
       const title = info.title || 'Snapchat Content';
       const thumbnail = info.thumbnail || '';
@@ -87,7 +87,7 @@ const extractSnapchat = async (url) => {
     // 2. FALLBACK: btch AIO
     try {
       console.log('[Snapchat] FALLBACK: btch AIO...');
-      const snpRes = await withTimeout(btch.aio(url), 12000, 'Snapchat AIO');
+      const snpRes = await withTimeout(btch.aio(url), 5000, 'Snapchat AIO');
 
       if (snpRes && snpRes.data) {
         const mediaArray = Array.isArray(snpRes.data) ? snpRes.data : [snpRes.data];

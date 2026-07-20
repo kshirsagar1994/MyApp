@@ -12,7 +12,7 @@ const extractLinkedIn = async (url) => {
     // 1. PRIMARY: yt-dlp
     try {
       console.log('[LinkedIn] PRIMARY: yt-dlp extraction...');
-      const info = await ytdlpGetInfoAsync(url, [], 45000);
+      const info = await ytdlpGetInfoAsync(url, [], 20000);
 
       const title = info.title || 'LinkedIn Media';
       const thumbnail = info.thumbnail || '';
@@ -82,7 +82,7 @@ const extractLinkedIn = async (url) => {
     // 2. FALLBACK: btch AIO
     try {
       console.log('[LinkedIn] FALLBACK: btch AIO...');
-      const lkRes = await withTimeout(btch.aio(url), 12000, 'LinkedIn AIO');
+      const lkRes = await withTimeout(btch.aio(url), 5000, 'LinkedIn AIO');
 
       if (lkRes && lkRes.data) {
         const items = Array.isArray(lkRes.data) ? lkRes.data : [lkRes.data];

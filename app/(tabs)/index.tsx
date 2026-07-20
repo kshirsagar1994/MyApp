@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Platform, Image, useColorScheme, Alert } from 'react-native';
+import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Platform, Image, useColorScheme, Alert, Modal, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { LinearGradient } from 'expo-linear-gradient';
@@ -54,21 +54,15 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
 ));
 
 // ========== SERVER CONFIGURATION ==========
-// Set this to your PC's local network IP address.
-// Find it by running 'ipconfig' (Windows) or 'ifconfig' (Mac/Linux)
-// Your phone and PC must be on the SAME Wi-Fi network.
-const SERVER_IP = '10.96.88.155'; // <-- Updated to your actual Wi-Fi IP
-const SERVER_PORT = '3000';
+// Using ADB reverse proxy: `adb reverse tcp:3000 tcp:3000`
+// This tunnels phone's localhost:3000 → PC's localhost:3000 via USB cable.
+const SERVER_IP = '192.168.31.155';
+const SERVER_PORT = 3000; // MUST MATCH THE PORT YOUR BACKEND IS RUNNING ON
 
 /** Resolves the backend server base URL */
 const getServerBaseUrl = (): string => {
-  // In Expo dev mode, hostUri is available (e.g., "192.168.1.5:8081")
-  const debuggerHost = Constants.expoConfig?.hostUri || Constants.manifest2?.extra?.expoGo?.debuggerHost || '';
-  const expoIp = debuggerHost.split(':')[0];
-
-  // Use Expo-detected IP in dev, hardcoded IP in release builds
-  const ip = expoIp || SERVER_IP;
-  return `http://${ip}:${SERVER_PORT}`;
+  // We force the local IP address for physical devices on WiFi to connect to the PC's server
+  return `http://${SERVER_IP}:${SERVER_PORT}`;
 };
 
 export default function HomeScreen() {
@@ -76,6 +70,9 @@ export default function HomeScreen() {
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [activeDownloads, setActiveDownloads] = useState<any[]>([]);
+  // YouTube download modal state
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [selectedDownloadTab, setSelectedDownloadTab] = useState<'video' | 'audio'>('video');
   
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -116,9 +113,9 @@ export default function HomeScreen() {
       // Move into an app-specific album visible in gallery & file manager
       let album = await MediaLibrary.getAlbumAsync('MyApp');
       if (album === null) {
-        await MediaLibrary.createAlbumAsync('MyApp', asset, false);
+        await MediaLibrary.createAlbumAsync('MyApp', asset, true);
       } else {
-        await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+        await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
       }
 
       const typeLabel = finalExt === '.jpg' ? 'Photo' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'Audio' : 'Video';
@@ -158,19 +155,17 @@ export default function HomeScreen() {
 
     // Clean filename (preserve spaces, remove only invalid filename characters)
     let baseName = opt.title || result?.title || 'Media';
-    if (opt.isPlaylist === false || opt.ytId) {
-       // If it's a playlist item, the title might be inside opt.quality as "1. Title"
-       if (opt.quality && !opt.quality.includes('Entire Playlist')) {
-         baseName = opt.quality.replace(/^\d+\.\s*/, '');
-       }
+    if (opt.quality && /^\d+\.\s/.test(opt.quality) && !opt.quality.includes('Entire Playlist')) {
+       // If it's a playlist item, the title is inside opt.quality as "1. Title"
+       baseName = opt.quality.replace(/^\d+\.\s*/, '');
     }
     
-    let cleanTitle = baseName.replace(/[/\\?%*:|"<>]/g, '-').trim();
+    let cleanTitle = baseName.replace(/[/\\?%*:|"<>#]/g, '-').trim();
     if (cleanTitle.length > 50) cleanTitle = cleanTitle.substring(0, 50).trim();
     if (!cleanTitle) cleanTitle = 'Media';
     
-    const uniqueId = Math.floor(Math.random() * 100000);
-    const fileName = `${cleanTitle}_${uniqueId}${finalExt}`;
+    // Use the exact title without a random suffix as requested
+    const fileName = `${cleanTitle}${finalExt}`;
 
     const newDownload = {
       id: Date.now().toString(),
@@ -392,7 +387,7 @@ export default function HomeScreen() {
       console.log('Connecting to:', apiUrl);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout — yt-dlp can take up to 45s
+      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout — extractors complete in <20s now
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -482,19 +477,146 @@ export default function HomeScreen() {
                 )}
               </View>
             </View>
-            
-            {result.options.map((opt: any, index: number) => (
-              <MediaOptionItem
-                key={index}
-                opt={opt}
-                index={index}
-                isDark={isDark}
-                themeColors={themeColors}
-                onDownload={handleStartDownload}
-                onPlaylistDownload={handlePlaylistDownloadAll}
-              />
-            ))}
+
+            {/* YouTube single video: show a single Download button → opens quality modal */}
+            {result.platform === 'youtube' && result.type !== 'playlist' ? (
+              <TouchableOpacity
+                style={styles.ytDownloadBtn}
+                onPress={() => { setSelectedDownloadTab('video'); setShowDownloadModal(true); }}
+              >
+                <LinearGradient colors={['#10B981', '#059669']} style={styles.ytDownloadBtnGradient}>
+                  <Ionicons name="download-outline" size={22} color="#FFF" />
+                  <Text style={styles.ytDownloadBtnText}>DOWNLOAD</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            ) : (
+              /* Non-YouTube or playlist: keep existing flat option list */
+              result.options.map((opt: any, index: number) => (
+                <MediaOptionItem
+                  key={index}
+                  opt={opt}
+                  index={index}
+                  isDark={isDark}
+                  themeColors={themeColors}
+                  onDownload={handleStartDownload}
+                  onPlaylistDownload={handlePlaylistDownloadAll}
+                />
+              ))
+            )}
           </Animated.View>
+        )}
+
+        {/* ═══════ YouTube Download Quality Modal ═══════ */}
+        {result && result.platform === 'youtube' && result.type !== 'playlist' && (
+          <Modal
+            visible={showDownloadModal}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setShowDownloadModal(false)}
+          >
+            <Pressable style={styles.modalOverlay} onPress={() => setShowDownloadModal(false)}>
+              <Pressable style={[styles.modalSheet, { backgroundColor: isDark ? '#111827' : '#FFFFFF' }]} onPress={(e) => e.stopPropagation()}>
+                {/* Handle bar */}
+                <View style={styles.modalHandle} />
+
+                {/* Title */}
+                <Text style={[styles.modalTitle, { color: themeColors.text }]}>Download Options</Text>
+                <Text style={[styles.modalSubtitle, { color: themeColors.subText }]} numberOfLines={2}>
+                  {result.title || 'YouTube Media'}
+                </Text>
+
+                {/* Tab Selector: Video / MP3 */}
+                <View style={[styles.modalTabRow, { backgroundColor: isDark ? '#1F2937' : '#F3F4F6' }]}>
+                  <TouchableOpacity
+                    style={[styles.modalTab, selectedDownloadTab === 'video' && styles.modalTabActive]}
+                    onPress={() => setSelectedDownloadTab('video')}
+                  >
+                    <Ionicons name="videocam" size={18} color={selectedDownloadTab === 'video' ? '#FFF' : (isDark ? '#9CA3AF' : '#6B7280')} />
+                    <Text style={[styles.modalTabText, selectedDownloadTab === 'video' && styles.modalTabTextActive]}>
+                      Video
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalTab, selectedDownloadTab === 'audio' && styles.modalTabActiveAudio]}
+                    onPress={() => setSelectedDownloadTab('audio')}
+                  >
+                    <Ionicons name="musical-notes" size={18} color={selectedDownloadTab === 'audio' ? '#FFF' : (isDark ? '#9CA3AF' : '#6B7280')} />
+                    <Text style={[styles.modalTabText, selectedDownloadTab === 'audio' && styles.modalTabTextActive]}>
+                      MP3
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Quality Options List */}
+                <ScrollView style={styles.modalOptionsList} showsVerticalScrollIndicator={false}>
+                  {result.options
+                    .filter((opt: any) => {
+                      if (selectedDownloadTab === 'audio') {
+                        return opt.isAudio || opt.format === 'MP3' || opt.format === 'M4A';
+                      }
+                      return !opt.isAudio && opt.format !== 'MP3' && opt.format !== 'M4A' && !opt.isPlaylist;
+                    })
+                    .map((opt: any, index: number) => {
+                      const isAudio = opt.isAudio || opt.format === 'MP3' || opt.format === 'M4A';
+                      return (
+                        <TouchableOpacity
+                          key={index}
+                          style={[styles.modalOption, { backgroundColor: isDark ? '#1F2937' : '#F9FAFB', borderColor: isDark ? '#374151' : '#E5E7EB' }]}
+                          onPress={() => {
+                            setShowDownloadModal(false);
+                            handleStartDownload(opt, isAudio ? undefined : 'video');
+                          }}
+                        >
+                          <View style={styles.modalOptionInfo}>
+                            <View style={styles.modalOptionRow}>
+                              <Ionicons
+                                name={isAudio ? 'musical-note' : 'film-outline'}
+                                size={20}
+                                color={isAudio ? '#8B5CF6' : '#10B981'}
+                              />
+                              <Text style={[styles.modalOptionQuality, { color: themeColors.text }]}>
+                                {opt.quality}
+                              </Text>
+                            </View>
+                            <View style={styles.modalOptionMeta}>
+                              <Text style={styles.modalOptionFormat}>{opt.format}</Text>
+                              {opt.size && opt.size !== 'Auto' && (
+                                <Text style={styles.modalOptionSize}>{opt.size}</Text>
+                              )}
+                              {opt.note ? <Text style={styles.modalOptionNote}>{opt.note}</Text> : null}
+                            </View>
+                          </View>
+                          <View style={[styles.modalDownloadIcon, { backgroundColor: isAudio ? '#8B5CF6' : '#10B981' }]}>
+                            <Ionicons name="download-outline" size={18} color="#FFF" />
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                  {/* Empty state */}
+                  {result.options.filter((opt: any) => {
+                    if (selectedDownloadTab === 'audio') return opt.isAudio || opt.format === 'MP3' || opt.format === 'M4A';
+                    return !opt.isAudio && opt.format !== 'MP3' && opt.format !== 'M4A' && !opt.isPlaylist;
+                  }).length === 0 && (
+                    <View style={styles.modalEmpty}>
+                      <Ionicons name="alert-circle-outline" size={40} color={themeColors.subText} />
+                      <Text style={[styles.modalEmptyText, { color: themeColors.subText }]}>
+                        No {selectedDownloadTab === 'audio' ? 'audio' : 'video'} options available
+                      </Text>
+                    </View>
+                  )}
+                </ScrollView>
+
+                {/* Cancel button */}
+                <TouchableOpacity
+                  style={[styles.modalCancelBtn, { backgroundColor: isDark ? '#1F2937' : '#F3F4F6' }]}
+                  onPress={() => setShowDownloadModal(false)}
+                >
+                  <Text style={[styles.modalCancelText, { color: themeColors.subText }]}>Cancel</Text>
+                </TouchableOpacity>
+              </Pressable>
+            </Pressable>
+          </Modal>
         )}
 
         {activeDownloads.length > 0 && (
@@ -623,6 +745,154 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   dualBtnText: { color: '#FFF', fontSize: 11, fontWeight: '700' },
+
+  // ─── YouTube Download Button ───
+  ytDownloadBtn: { borderRadius: 16, overflow: 'hidden', height: 56, marginTop: 8 },
+  ytDownloadBtnGradient: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
+  ytDownloadBtnText: { color: '#FFF', fontWeight: '800', fontSize: 16, letterSpacing: 1.5 },
+
+  // ─── Download Modal ───
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 30,
+    maxHeight: '80%',
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(150,150,150,0.4)',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 20,
+  },
+  modalTabRow: {
+    flexDirection: 'row',
+    borderRadius: 14,
+    padding: 4,
+    marginBottom: 20,
+  },
+  modalTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 11,
+    gap: 6,
+  },
+  modalTabActive: {
+    backgroundColor: '#10B981',
+  },
+  modalTabActiveAudio: {
+    backgroundColor: '#8B5CF6',
+  },
+  modalTabText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#9CA3AF',
+  },
+  modalTabTextActive: {
+    color: '#FFFFFF',
+  },
+  modalOptionsList: {
+    maxHeight: 340,
+  },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  modalOptionInfo: {
+    flex: 1,
+  },
+  modalOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  modalOptionQuality: {
+    fontSize: 14,
+    fontWeight: '700',
+    flex: 1,
+  },
+  modalOptionMeta: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+    marginLeft: 28,
+  },
+  modalOptionFormat: {
+    fontSize: 11,
+    color: '#3B82F6',
+    fontWeight: '700',
+    backgroundColor: 'rgba(59,130,246,0.12)',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  modalOptionSize: {
+    fontSize: 11,
+    color: '#94A3B8',
+    fontWeight: '600',
+  },
+  modalOptionNote: {
+    fontSize: 10,
+    color: '#F59E0B',
+    fontWeight: '600',
+  },
+  modalDownloadIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+  },
+  modalEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    gap: 10,
+  },
+  modalEmptyText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalCancelBtn: {
+    marginTop: 16,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
   progressSection: { marginTop: 20 },
   sectionLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 1, marginBottom: 15, opacity: 0.6 },
   progressCard: {
