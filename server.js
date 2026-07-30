@@ -28,8 +28,13 @@ const getYtdlpPath = () => {
   return path.join(__dirname, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
 };
 
+const IS_VERCEL = !!process.env.VERCEL;
+
 /** ASYNC playlist extraction */
 const ytdlpGetPlaylistAsync = (url, timeoutMs = 30000) => {
+  if (IS_VERCEL) {
+    return Promise.reject(new Error('Playlists are not supported on serverless deployment. Use single video links.'));
+  }
   return new Promise((resolve, reject) => {
     const ytdlpPath = getYtdlpPath();
     const args = ['--flat-playlist', '-J', '--no-warnings', '--no-check-certificates'];

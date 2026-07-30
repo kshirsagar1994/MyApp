@@ -4,8 +4,15 @@ const fs = require('fs');
 
 /**
  * Async yt-dlp JSON extraction — non-blocking.
+ * NOTE: On Vercel serverless, yt-dlp binary cannot run. We detect this
+ * and immediately reject so callers fall through to btch-downloader fallback.
  */
+const IS_VERCEL = !!process.env.VERCEL;
+
 const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
+  if (IS_VERCEL) {
+    return Promise.reject(new Error('yt-dlp unavailable in serverless environment'));
+  }
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
     const ytdlpPath = path.resolve(__dirname, '..', '..', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
@@ -97,10 +104,12 @@ const withTimeout = (promise, ms, name = 'Operation') => {
 
 /**
  * Extracts YouTube media metadata using async yt-dlp.
+ * Falls back to btch-downloader on serverless (Vercel) where yt-dlp is unavailable.
  */
 const extractYouTube = async (url) => {
+  // 1. PRIMARY: yt-dlp (works on Docker/Render/local, skipped on Vercel)
   try {
-    console.log('[YouTube Extractor] Extracting:', url);
+    console.log('[YouTube Extractor] PRIMARY: yt-dlp extraction:', url);
     const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 20000);
 
     const videoId = info.id;
@@ -124,9 +133,6 @@ const extractYouTube = async (url) => {
 
     uniqueHeights.forEach((h) => {
       if (!h) return;
-      // Prioritize pre-merged H.264 MP4 streams (have both video+audio)
-      // These stream directly without ffmpeg and play on ALL mobile devices.
-      // Only fall back to video-only if no pre-merged format exists at this height.
       const f = videoFormats.find((fmt) => fmt.height === h && fmt.acodec !== 'none' && fmt.ext === 'mp4' && fmt.vcodec?.includes('avc1')) ||
                 videoFormats.find((fmt) => fmt.height === h && fmt.acodec !== 'none' && fmt.ext === 'mp4') ||
                 videoFormats.find((fmt) => fmt.height === h && fmt.acodec !== 'none') || 
@@ -143,8 +149,6 @@ const extractYouTube = async (url) => {
           format: 'MP4',
           url: '',
           ytId: videoId,
-          // If pre-merged (has audio), use single format ID (streams directly, no ffmpeg).
-          // If video-only, combine with best audio → requires ffmpeg merge on server.
           itag: isMerged ? f.format_id : `${f.format_id}+${bestAudioId}`,
           note: isMerged ? '' : 'HD/4K (Requires ffmpeg)',
           useProxy: true,
@@ -204,10 +208,67 @@ const extractYouTube = async (url) => {
     if (options.length === 0) throw new Error('No formats found for this media.');
 
     return { success: true, data: { type: 'video', title, thumbnail, options } };
-  } catch (error) {
-    console.error('[YouTube Extractor] Error:', error.message);
-    return { success: false, error: error.message || 'YouTube extraction failed or timed out' };
+  } catch (ytdlpError) {
+    console.error('[YouTube Extractor] yt-dlp failed:', ytdlpError.message);
   }
+
+  // 2. FALLBACK: btch-downloader (pure JS — works on Vercel serverless)
+  try {
+    let btch;
+    try { btch = require('btch-downloader'); } catch { btch = null; }
+    if (!btch) throw new Error('btch-downloader not available');
+
+    console.log('[YouTube Extractor] FALLBACK: btch-downloader...');
+    const aioRes = await withTimeout(btch.aio(url), 15000, 'YouTube AIO');
+
+    if (aioRes && aioRes.data) {
+      const items = Array.isArray(aioRes.data) ? aioRes.data : [aioRes.data];
+      const options = [];
+
+      items.forEach(item => {
+        const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
+        if (!mUrl || typeof mUrl !== 'string' || !mUrl.startsWith('http')) return;
+
+        const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
+        const isAudio = mUrl.match(/\.(mp3|m4a)/i);
+
+        if (isImage) {
+          options.push({
+            quality: 'Thumbnail',
+            size: 'Auto', format: 'JPG', url: mUrl,
+            isImage: true, imageUrl: mUrl, useProxy: true,
+          });
+        } else if (isAudio) {
+          options.push({
+            quality: 'Audio',
+            size: 'Auto', format: 'M4A', url: mUrl,
+            isAudio: true, useProxy: true,
+          });
+        } else {
+          options.push({
+            quality: item.quality || 'HD Video',
+            size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+          });
+          options.push({
+            quality: 'Audio Only',
+            size: 'Auto', format: 'M4A', url: mUrl,
+            isAudio: true, useProxy: true,
+          });
+        }
+      });
+
+      if (options.length > 0) {
+        const title = aioRes.title || 'YouTube Media';
+        const thumbnail = aioRes.thumbnail || '';
+        return { success: true, data: { type: 'video', title, thumbnail, options } };
+      }
+    }
+  } catch (btchError) {
+    console.error('[YouTube Extractor] btch fallback failed:', btchError.message);
+  }
+
+  return { success: false, error: 'YouTube extraction failed. All methods exhausted.' };
 };
 
 module.exports = { extractYouTube, withTimeout, ytdlpGetInfoAsync };
+
