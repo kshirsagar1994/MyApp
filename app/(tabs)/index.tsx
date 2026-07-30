@@ -54,15 +54,18 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
 ));
 
 // ========== SERVER CONFIGURATION ==========
-// Using ADB reverse proxy: `adb reverse tcp:3000 tcp:3000`
-// This tunnels phone's localhost:3000 → PC's localhost:3000 via USB cable.
-const SERVER_IP = '192.168.31.155';
-const SERVER_PORT = 3000; // MUST MATCH THE PORT YOUR BACKEND IS RUNNING ON
+// Backend is deployed on Vercel
+// IMPORTANT: Replace this URL with your exact Vercel deployment URL (e.g., https://my-app-xxx.vercel.app)
+const VERCEL_URL = 'https://my-app-sigma-ten.vercel.app'; // <-- REPLACE THIS WITH YOUR VERCEL APP URL
 
 /** Resolves the backend server base URL */
 const getServerBaseUrl = (): string => {
-  // We force the local IP address for physical devices on WiFi to connect to the PC's server
-  return `http://${SERVER_IP}:${SERVER_PORT}`;
+  // If running in local development mode (Expo Go), automatically use your computer's IP address and Port 3000
+  if (__DEV__ && Constants.expoConfig?.hostUri) {
+    const localIp = Constants.expoConfig.hostUri.split(':')[0];
+    return `http://${localIp}:3000`; 
+  }
+  return VERCEL_URL;
 };
 
 export default function HomeScreen() {
@@ -387,7 +390,7 @@ export default function HomeScreen() {
       console.log('Connecting to:', apiUrl);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout — extractors complete in <20s now
+      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout — Render free tier cold starts can take 50+ seconds
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -413,7 +416,7 @@ export default function HomeScreen() {
         const baseUrl = getServerBaseUrl();
         Alert.alert(
           'Connection Failed',
-          `Cannot reach backend server.\n\nTrying: ${baseUrl}\n\n✅ Make sure:\n1. Run "node server.js" on your PC\n2. Phone and PC are on same Wi-Fi\n3. PC firewall allows port ${SERVER_PORT}`
+          `Cannot reach backend server.\n\nTrying: ${baseUrl}\n\n✅ Make sure:\n1. Your device has internet access\n2. The Render server is awake and running`
         );
       } else {
         Alert.alert('Extraction Error', error.message);

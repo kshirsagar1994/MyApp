@@ -414,7 +414,12 @@ app.get('/api/media/playlist-items', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
-  console.log('Supported: YouTube (single + playlists), Instagram, Facebook, Snapchat, LinkedIn');
-});
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log('Supported: YouTube (single + playlists), Instagram, Facebook, Snapchat, LinkedIn');
+  });
+}
+
+// Export for Vercel serverless functions
+module.exports = app;
