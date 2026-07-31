@@ -12,11 +12,13 @@
     "vercel-build": "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp && chmod a+rx yt-dlp"
   },
   "dependencies": {
+    "@bochilteam/scraper": "^5.0.1",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
+    "@xct007/frieren-scraper": "^0.0.2",
     "btch-downloader": "^6.0.25",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
@@ -39,7 +41,8 @@
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
-    "react-native-web": "~0.21.0"
+    "react-native-web": "~0.21.0",
+    "snapsave-media-downloader": "^2.4.1"
   },
   "devDependencies": {
     "@react-native-community/cli": "^20.1.3",

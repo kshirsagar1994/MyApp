@@ -154,10 +154,51 @@ const extractFacebook = async (url) => {
       }
     }
 
-    // 3. FALLBACK 2: btch AIO (generic, increased timeout to 15s)
+    // 3. FALLBACK 2: snapsave-media-downloader (reliable for Facebook)
+    if (options.length === 0) {
+      try {
+        console.log('[Facebook] FALLBACK 2: snapsave...');
+        let snapsave;
+        try {
+          const mod = await import('snapsave-media-downloader');
+          snapsave = mod.snapsave;
+        } catch (err) {
+          console.error('[Facebook] snapsave module not found:', err.message);
+        }
+
+        if (snapsave) {
+          const fbRes = await withTimeout(snapsave(url), 15000, 'Facebook snapsave');
+          if (fbRes && fbRes.success && fbRes.data && fbRes.data.media) {
+            fbRes.data.media.forEach(m => {
+              if (m.url && typeof m.url === 'string' && m.url.startsWith('http')) {
+                options.push({
+                  quality: m.resolution || 'HD Video',
+                  size: 'Auto', format: 'MP4', url: m.url, useProxy: true,
+                });
+                // Also add an audio option using the video URL
+                options.push({
+                  quality: 'Audio Only',
+                  size: 'Auto', format: 'M4A', url: m.url, isAudio: true, useProxy: true,
+                });
+              }
+            });
+            if (fbRes.data.preview) {
+               options.push({
+                  quality: 'Thumbnail',
+                  size: 'Auto', format: 'JPG', url: fbRes.data.preview, isImage: true, imageUrl: fbRes.data.preview, useProxy: true,
+               });
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[Facebook] snapsave fallback failed:', e.message);
+      }
+    }
+
+    // 4. FALLBACK 3: btch AIO (generic)
     if (options.length === 0 && btch && btch.aio) {
       try {
-        console.log('[Facebook] FALLBACK 2: btch AIO...');
+        console.log('[Facebook] FALLBACK 3: btch AIO...');
         const fbRes = await withTimeout(btch.aio(url), 15000, 'Facebook AIO');
 
         if (fbRes && fbRes.data) {

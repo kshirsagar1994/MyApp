@@ -212,39 +212,72 @@ const extractYouTube = async (url) => {
     console.error('[YouTube Extractor] yt-dlp failed:', ytdlpError.message);
   }
 
-  // 2. FALLBACK: btch-downloader (pure JS — works on Vercel serverless)
+  // 2. FALLBACK: btch.youtube() — dedicated YouTube method (works on Vercel serverless)
+  //    btch.aio() does NOT work for YouTube (returns "Invalid search API response").
+  //    btch.youtube() returns { status, title, thumbnail, author, mp3, mp4 }.
   try {
     let btch;
     try { btch = require('btch-downloader'); } catch { btch = null; }
     if (!btch) throw new Error('btch-downloader not available');
 
-    console.log('[YouTube Extractor] FALLBACK: btch-downloader...');
-    const aioRes = await withTimeout(btch.aio(url), 15000, 'YouTube AIO');
+    console.log('[YouTube Extractor] FALLBACK: btch.youtube()...');
+    const ytRes = await withTimeout(btch.youtube(url), 15000, 'YouTube btch');
 
-    if (aioRes && aioRes.data) {
-      const items = Array.isArray(aioRes.data) ? aioRes.data : [aioRes.data];
+    if (ytRes && ytRes.status) {
       const options = [];
+      const title = ytRes.title || 'YouTube Media';
+      const thumbnail = ytRes.thumbnail || '';
 
-      items.forEach(item => {
-        const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
-        if (!mUrl || typeof mUrl !== 'string' || !mUrl.startsWith('http')) return;
+      // MP4 video download
+      if (ytRes.mp4 && typeof ytRes.mp4 === 'string' && ytRes.mp4.startsWith('http')) {
+        options.push({
+          quality: 'HD Video',
+          size: 'Auto', format: 'MP4', url: ytRes.mp4, useProxy: true,
+        });
+      }
 
-        const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
-        const isAudio = mUrl.match(/\.(mp3|m4a)/i);
+      // MP3 audio download
+      if (ytRes.mp3 && typeof ytRes.mp3 === 'string' && ytRes.mp3.startsWith('http')) {
+        options.push({
+          quality: 'Audio (MP3)',
+          size: 'Auto', format: 'MP3', url: ytRes.mp3,
+          isAudio: true, useProxy: true,
+        });
+      }
 
-        if (isImage) {
-          options.push({
-            quality: 'Thumbnail',
-            size: 'Auto', format: 'JPG', url: mUrl,
-            isImage: true, imageUrl: mUrl, useProxy: true,
-          });
-        } else if (isAudio) {
-          options.push({
-            quality: 'Audio',
-            size: 'Auto', format: 'M4A', url: mUrl,
-            isAudio: true, useProxy: true,
-          });
-        } else {
+      // Thumbnail image
+      if (thumbnail) {
+        options.push({
+          quality: 'Thumbnail',
+          size: 'Auto', format: 'JPG', url: thumbnail,
+          isImage: true, imageUrl: thumbnail, useProxy: true,
+        });
+      }
+
+      if (options.length > 0) {
+        return { success: true, data: { type: 'video', title, thumbnail, options } };
+      }
+    }
+  } catch (btchError) {
+    console.error('[YouTube Extractor] btch.youtube() failed:', btchError.message);
+  }
+
+  // 3. LAST RESORT: btch.aio() (generic, rarely works for YouTube but try anyway)
+  try {
+    let btch;
+    try { btch = require('btch-downloader'); } catch { btch = null; }
+    if (btch && btch.aio) {
+      console.log('[YouTube Extractor] LAST RESORT: btch.aio()...');
+      const aioRes = await withTimeout(btch.aio(url), 10000, 'YouTube AIO');
+
+      if (aioRes && aioRes.data) {
+        const items = Array.isArray(aioRes.data) ? aioRes.data : [aioRes.data];
+        const options = [];
+
+        items.forEach(item => {
+          const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
+          if (!mUrl || typeof mUrl !== 'string' || !mUrl.startsWith('http')) return;
+
           options.push({
             quality: item.quality || 'HD Video',
             size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
@@ -254,17 +287,17 @@ const extractYouTube = async (url) => {
             size: 'Auto', format: 'M4A', url: mUrl,
             isAudio: true, useProxy: true,
           });
-        }
-      });
+        });
 
-      if (options.length > 0) {
-        const title = aioRes.title || 'YouTube Media';
-        const thumbnail = aioRes.thumbnail || '';
-        return { success: true, data: { type: 'video', title, thumbnail, options } };
+        if (options.length > 0) {
+          const title = aioRes.title || 'YouTube Media';
+          const thumbnail = aioRes.thumbnail || '';
+          return { success: true, data: { type: 'video', title, thumbnail, options } };
+        }
       }
     }
-  } catch (btchError) {
-    console.error('[YouTube Extractor] btch fallback failed:', btchError.message);
+  } catch (aioError) {
+    console.error('[YouTube Extractor] btch.aio() failed:', aioError.message);
   }
 
   return { success: false, error: 'YouTube extraction failed. All methods exhausted.' };
