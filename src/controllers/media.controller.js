@@ -1,8 +1,21 @@
-const { extractYouTube } = require('../extractors/youtube');
-const { extractInstagram } = require('../extractors/instagram');
-const { extractFacebook } = require('../extractors/facebook');
-const { extractSnapchat } = require('../extractors/snapchat');
-const { extractLinkedIn } = require('../extractors/linkedin');
+// GUARD: Each extractor is wrapped in try/catch so a single broken module
+// doesn't crash the entire server (e.g., if btch-downloader has a dep issue).
+let extractYouTube, extractInstagram, extractFacebook, extractSnapchat, extractLinkedIn;
+
+try { ({ extractYouTube } = require('../extractors/youtube')); }
+catch (e) { console.error('[Controller] Failed to load YouTube extractor:', e.message); }
+
+try { ({ extractInstagram } = require('../extractors/instagram')); }
+catch (e) { console.error('[Controller] Failed to load Instagram extractor:', e.message); }
+
+try { ({ extractFacebook } = require('../extractors/facebook')); }
+catch (e) { console.error('[Controller] Failed to load Facebook extractor:', e.message); }
+
+try { ({ extractSnapchat } = require('../extractors/snapchat')); }
+catch (e) { console.error('[Controller] Failed to load Snapchat extractor:', e.message); }
+
+try { ({ extractLinkedIn } = require('../extractors/linkedin')); }
+catch (e) { console.error('[Controller] Failed to load LinkedIn extractor:', e.message); }
 
 // Helper to determine the platform dynamically from the URL
 const detectPlatform = (url) => {
@@ -28,18 +41,23 @@ const analyzeUrl = async (req, res) => {
   try {
     switch (platform) {
       case 'youtube':
+        if (!extractYouTube) return res.status(500).json({ status: 'error', message: 'YouTube extractor is unavailable. Server configuration error.' });
         result = await extractYouTube(url);
         break;
       case 'instagram':
+        if (!extractInstagram) return res.status(500).json({ status: 'error', message: 'Instagram extractor is unavailable. Server configuration error.' });
         result = await extractInstagram(url);
         break;
       case 'facebook':
+        if (!extractFacebook) return res.status(500).json({ status: 'error', message: 'Facebook extractor is unavailable. Server configuration error.' });
         result = await extractFacebook(url);
         break;
       case 'snapchat':
+        if (!extractSnapchat) return res.status(500).json({ status: 'error', message: 'Snapchat extractor is unavailable. Server configuration error.' });
         result = await extractSnapchat(url);
         break;
       case 'linkedin':
+        if (!extractLinkedIn) return res.status(500).json({ status: 'error', message: 'LinkedIn extractor is unavailable. Server configuration error.' });
         result = await extractLinkedIn(url);
         break;
       default:
@@ -60,8 +78,8 @@ const analyzeUrl = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[Controller Error]', error);
-    return res.status(500).json({ status: 'error', message: 'Internal Server Error during extraction.' });
+    console.error(`[Controller Error] [${platform}]`, error);
+    return res.status(500).json({ status: 'error', message: `Internal Server Error during ${platform} extraction.` });
   }
 };
 

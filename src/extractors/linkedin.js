@@ -1,5 +1,22 @@
 const { withTimeout, ytdlpGetInfoAsync } = require('./youtube');
-const btch = require('btch-downloader');
+
+// GUARD: btch-downloader may not be available in all environments
+let btch;
+try { btch = require('btch-downloader'); } catch { btch = null; }
+
+/**
+ * Clean LinkedIn URLs — remove tracking params that confuse extractors.
+ */
+const cleanLinkedInUrl = (url) => {
+  try {
+    const u = new URL(url);
+    // Strip common LinkedIn tracking/share params
+    ['miniProfileUrn', 'lipi', 'lici', 'trk', 'originalSubdomain', 'trackingId'].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch {
+    return url;
+  }
+};
 
 /**
  * Extracts LinkedIn media (videos, images, audio from posts).
@@ -8,11 +25,22 @@ const btch = require('btch-downloader');
 const extractLinkedIn = async (url) => {
   try {
     const options = [];
+    const cleanedUrl = cleanLinkedInUrl(url);
 
     // 1. PRIMARY: yt-dlp
     try {
       console.log('[LinkedIn] PRIMARY: yt-dlp extraction...');
-      const info = await ytdlpGetInfoAsync(url, [], 20000);
+      let info;
+      try {
+        info = await ytdlpGetInfoAsync(cleanedUrl, [], 25000);
+      } catch (cleanErr) {
+        if (cleanedUrl !== url) {
+          console.log('[LinkedIn] yt-dlp: cleaned URL failed, trying original...');
+          info = await ytdlpGetInfoAsync(url, [], 25000);
+        } else {
+          throw cleanErr;
+        }
+      }
 
       const title = info.title || 'LinkedIn Media';
       const thumbnail = info.thumbnail || '';
@@ -79,45 +107,47 @@ const extractLinkedIn = async (url) => {
       console.error('[LinkedIn] yt-dlp failed:', err.message);
     }
 
-    // 2. FALLBACK: btch AIO
-    try {
-      console.log('[LinkedIn] FALLBACK: btch AIO...');
-      const lkRes = await withTimeout(btch.aio(url), 5000, 'LinkedIn AIO');
+    // 2. FALLBACK: btch AIO (increased timeout to 12s)
+    if (btch && btch.aio) {
+      try {
+        console.log('[LinkedIn] FALLBACK: btch AIO...');
+        const lkRes = await withTimeout(btch.aio(url), 12000, 'LinkedIn AIO');
 
-      if (lkRes && lkRes.data) {
-        const items = Array.isArray(lkRes.data) ? lkRes.data : [lkRes.data];
-        items.forEach(item => {
-          const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
-          if (mUrl && typeof mUrl === 'string' && mUrl.startsWith('http')) {
-            const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
-            const isAudio = mUrl.match(/\.(mp3|m4a)/i);
-            
-            if (isImage) {
-              options.push({
-                quality: 'High Res Photo',
-                size: 'Auto', format: 'JPG', url: mUrl, isImage: true, imageUrl: item.thumbnail || mUrl, useProxy: true,
-              });
-            } else if (!isAudio) {
-              options.push({
-                quality: 'HD Video',
-                size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
-              });
-              options.push({
-                quality: 'Audio Only',
-                size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
-              });
-              if (item.thumbnail) {
+        if (lkRes && lkRes.data) {
+          const items = Array.isArray(lkRes.data) ? lkRes.data : [lkRes.data];
+          items.forEach(item => {
+            const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
+            if (mUrl && typeof mUrl === 'string' && mUrl.startsWith('http')) {
+              const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
+              const isAudio = mUrl.match(/\.(mp3|m4a)/i);
+              
+              if (isImage) {
                 options.push({
                   quality: 'High Res Photo',
-                  size: 'Auto', format: 'JPG', url: item.thumbnail, isImage: true, imageUrl: item.thumbnail, useProxy: true,
+                  size: 'Auto', format: 'JPG', url: mUrl, isImage: true, imageUrl: item.thumbnail || mUrl, useProxy: true,
                 });
+              } else if (!isAudio) {
+                options.push({
+                  quality: 'HD Video',
+                  size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+                });
+                options.push({
+                  quality: 'Audio Only',
+                  size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+                });
+                if (item.thumbnail) {
+                  options.push({
+                    quality: 'High Res Photo',
+                    size: 'Auto', format: 'JPG', url: item.thumbnail, isImage: true, imageUrl: item.thumbnail, useProxy: true,
+                  });
+                }
               }
             }
-          }
-        });
+          });
+        }
+      } catch (e) {
+        console.error('[LinkedIn] AIO fallback failed:', e.message);
       }
-    } catch (e) {
-      console.error('[LinkedIn] AIO fallback failed:', e.message);
     }
 
     if (options.length > 0) {

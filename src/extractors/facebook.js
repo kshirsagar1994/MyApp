@@ -1,18 +1,55 @@
 const { withTimeout, ytdlpGetInfoAsync } = require('./youtube');
-const btch = require('btch-downloader');
+
+// GUARD: btch-downloader may not be available in all environments
+let btch;
+try { btch = require('btch-downloader'); } catch { btch = null; }
+
+/**
+ * Normalize Facebook URLs that yt-dlp doesn't support.
+ * facebook.com/share/v/xxx → facebook.com/reel/xxx (yt-dlp supported)
+ * Also strips tracking params that confuse extractors.
+ */
+const normalizeFacebookUrl = (url) => {
+  try {
+    const u = new URL(url);
+    // Strip tracking params
+    ['mibextid', 'sfnsn', '_nc_sid', '__cft__', '__tn__'].forEach(p => u.searchParams.delete(p));
+
+    // /share/v/ID/ → /reel/ID/  (yt-dlp recognizes /reel/ but not /share/v/)
+    const shareMatch = u.pathname.match(/^\/share\/v\/([^/]+)/);
+    if (shareMatch) {
+      u.pathname = `/reel/${shareMatch[1]}`;
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+};
 
 /**
  * Extracts Facebook media (videos, images, audio).
- * Uses yt-dlp as PRIMARY, btch AIO as fallback.
+ * Uses yt-dlp as PRIMARY, btch fbdown as FALLBACK 1, btch AIO as FALLBACK 2.
  */
 const extractFacebook = async (url) => {
   try {
     const options = [];
+    const normalizedUrl = normalizeFacebookUrl(url);
 
-    // 1. PRIMARY: yt-dlp
+    // 1. PRIMARY: yt-dlp (try normalized URL first, original as fallback)
     try {
       console.log('[Facebook] PRIMARY: yt-dlp extraction...');
-      const info = await ytdlpGetInfoAsync(url, [], 20000);
+      let info;
+      try {
+        info = await ytdlpGetInfoAsync(normalizedUrl, [], 25000);
+      } catch (normErr) {
+        // If normalized URL failed and it's different from original, try original
+        if (normalizedUrl !== url) {
+          console.log('[Facebook] yt-dlp: normalized URL failed, trying original...');
+          info = await ytdlpGetInfoAsync(url, [], 25000);
+        } else {
+          throw normErr;
+        }
+      }
 
       const title = info.title || 'Facebook Media';
       const thumbnail = info.thumbnail || '';
@@ -82,44 +119,81 @@ const extractFacebook = async (url) => {
       console.error('[Facebook] yt-dlp failed:', err.message);
     }
 
-    // 2. FALLBACK: btch AIO
-    try {
-      console.log('[Facebook] FALLBACK: btch AIO...');
-      const fbRes = await withTimeout(btch.aio(url), 5000, 'Facebook AIO');
+    // 2. FALLBACK 1: btch fbdown (dedicated Facebook downloader — more reliable than generic AIO)
+    if (btch && btch.fbdown) {
+      try {
+        console.log('[Facebook] FALLBACK 1: btch fbdown...');
+        const fbRes = await withTimeout(btch.fbdown(url), 10000, 'Facebook fbdown');
 
-      if (fbRes && fbRes.data) {
-        const items = Array.isArray(fbRes.data) ? fbRes.data : [fbRes.data];
-        items.forEach(item => {
-          const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
-          if (mUrl && typeof mUrl === 'string' && mUrl.startsWith('http')) {
-            const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
-            const isAudio = mUrl.match(/\.(mp3|m4a)/i);
-            if (isImage) {
+        if (fbRes && fbRes.status) {
+          // fbdown returns { status: true, Normal_video: url, HD: url }
+          if (fbRes.HD && typeof fbRes.HD === 'string' && fbRes.HD.startsWith('http')) {
+            options.push({
+              quality: 'HD Video',
+              size: 'Auto', format: 'MP4', url: fbRes.HD, useProxy: true,
+            });
+            options.push({
+              quality: 'Audio Only',
+              size: 'Auto', format: 'M4A', url: fbRes.HD, isAudio: true, useProxy: true,
+            });
+          }
+          if (fbRes.Normal_video && typeof fbRes.Normal_video === 'string' && fbRes.Normal_video.startsWith('http')) {
+            // Only add SD if it's different from HD
+            const hdPath = fbRes.HD ? fbRes.HD.split('?')[0] : '';
+            const sdPath = fbRes.Normal_video.split('?')[0];
+            if (sdPath !== hdPath) {
               options.push({
-                quality: 'High Res Photo',
-                size: 'Auto', format: 'JPG', url: mUrl, isImage: true, imageUrl: item.thumbnail || mUrl, useProxy: true,
+                quality: 'SD Video',
+                size: 'Auto', format: 'MP4', url: fbRes.Normal_video, useProxy: true,
               });
-            } else if (!isAudio) {
-              options.push({
-                quality: 'HD Video',
-                size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
-              });
-              options.push({
-                quality: 'Audio Only',
-                size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
-              });
-              if (item.thumbnail) {
-                options.push({
-                  quality: 'High Res Photo',
-                  size: 'Auto', format: 'JPG', url: item.thumbnail, isImage: true, imageUrl: item.thumbnail, useProxy: true,
-                });
-              }
             }
           }
-        });
+        }
+      } catch (e) {
+        console.error('[Facebook] fbdown fallback failed:', e.message);
       }
-    } catch (e) {
-      console.error('[Facebook] AIO fallback failed:', e.message);
+    }
+
+    // 3. FALLBACK 2: btch AIO (generic, increased timeout to 15s)
+    if (options.length === 0 && btch && btch.aio) {
+      try {
+        console.log('[Facebook] FALLBACK 2: btch AIO...');
+        const fbRes = await withTimeout(btch.aio(url), 15000, 'Facebook AIO');
+
+        if (fbRes && fbRes.data) {
+          const items = Array.isArray(fbRes.data) ? fbRes.data : [fbRes.data];
+          items.forEach(item => {
+            const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
+            if (mUrl && typeof mUrl === 'string' && mUrl.startsWith('http')) {
+              const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
+              const isAudio = mUrl.match(/\.(mp3|m4a)/i);
+              if (isImage) {
+                options.push({
+                  quality: 'High Res Photo',
+                  size: 'Auto', format: 'JPG', url: mUrl, isImage: true, imageUrl: item.thumbnail || mUrl, useProxy: true,
+                });
+              } else if (!isAudio) {
+                options.push({
+                  quality: 'HD Video',
+                  size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+                });
+                options.push({
+                  quality: 'Audio Only',
+                  size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+                });
+                if (item.thumbnail) {
+                  options.push({
+                    quality: 'High Res Photo',
+                    size: 'Auto', format: 'JPG', url: item.thumbnail, isImage: true, imageUrl: item.thumbnail, useProxy: true,
+                  });
+                }
+              }
+            }
+          });
+        }
+      } catch (e) {
+        console.error('[Facebook] AIO fallback failed:', e.message);
+      }
     }
 
     if (options.length > 0) {

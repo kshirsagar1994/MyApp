@@ -1,5 +1,22 @@
 const { withTimeout, ytdlpGetInfoAsync } = require('./youtube');
-const btch = require('btch-downloader');
+
+// GUARD: btch-downloader may not be available in all environments
+let btch;
+try { btch = require('btch-downloader'); } catch { btch = null; }
+
+/**
+ * Clean Snapchat URLs — remove tracking params that confuse extractors.
+ */
+const cleanSnapchatUrl = (url) => {
+  try {
+    const u = new URL(url);
+    // Strip common tracking/share params
+    ['share_id', 'locale', 'sf', 'sc_referrer'].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch {
+    return url;
+  }
+};
 
 /**
  * Extracts Snapchat media (stories, spotlight videos, images).
@@ -8,11 +25,22 @@ const btch = require('btch-downloader');
 const extractSnapchat = async (url) => {
   try {
     const options = [];
+    const cleanedUrl = cleanSnapchatUrl(url);
 
     // 1. PRIMARY: yt-dlp
     try {
       console.log('[Snapchat] PRIMARY: yt-dlp extraction...');
-      const info = await ytdlpGetInfoAsync(url, [], 20000);
+      let info;
+      try {
+        info = await ytdlpGetInfoAsync(cleanedUrl, [], 25000);
+      } catch (cleanErr) {
+        if (cleanedUrl !== url) {
+          console.log('[Snapchat] yt-dlp: cleaned URL failed, trying original...');
+          info = await ytdlpGetInfoAsync(url, [], 25000);
+        } else {
+          throw cleanErr;
+        }
+      }
 
       const title = info.title || 'Snapchat Content';
       const thumbnail = info.thumbnail || '';
@@ -84,43 +112,45 @@ const extractSnapchat = async (url) => {
       console.error('[Snapchat] yt-dlp failed:', err.message);
     }
 
-    // 2. FALLBACK: btch AIO
-    try {
-      console.log('[Snapchat] FALLBACK: btch AIO...');
-      const snpRes = await withTimeout(btch.aio(url), 5000, 'Snapchat AIO');
+    // 2. FALLBACK: btch AIO (increased timeout to 12s)
+    if (btch && btch.aio) {
+      try {
+        console.log('[Snapchat] FALLBACK: btch AIO...');
+        const snpRes = await withTimeout(btch.aio(url), 12000, 'Snapchat AIO');
 
-      if (snpRes && snpRes.data) {
-        const mediaArray = Array.isArray(snpRes.data) ? snpRes.data : [snpRes.data];
-        mediaArray.forEach((item) => {
-          const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
-          if (!mUrl) return;
-          const isImg = mUrl.split('?')[0].toLowerCase().match(/\.(jpg|jpeg|png|webp)/);
-          
-          if (isImg) {
-            options.push({
-              quality: 'High Res Photo',
-              size: 'Auto', format: 'JPG', url: mUrl, isImage: true, imageUrl: item.thumbnail || mUrl, useProxy: true,
-            });
-          } else {
-            options.push({
-              quality: 'HD Video',
-              size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
-            });
-            options.push({
-              quality: 'Audio Only',
-              size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
-            });
-            if (item.thumbnail) {
+        if (snpRes && snpRes.data) {
+          const mediaArray = Array.isArray(snpRes.data) ? snpRes.data : [snpRes.data];
+          mediaArray.forEach((item) => {
+            const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
+            if (!mUrl) return;
+            const isImg = mUrl.split('?')[0].toLowerCase().match(/\.(jpg|jpeg|png|webp)/);
+            
+            if (isImg) {
               options.push({
                 quality: 'High Res Photo',
-                size: 'Auto', format: 'JPG', url: item.thumbnail, isImage: true, imageUrl: item.thumbnail, useProxy: true,
+                size: 'Auto', format: 'JPG', url: mUrl, isImage: true, imageUrl: item.thumbnail || mUrl, useProxy: true,
               });
+            } else {
+              options.push({
+                quality: 'HD Video',
+                size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+              });
+              options.push({
+                quality: 'Audio Only',
+                size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+              });
+              if (item.thumbnail) {
+                options.push({
+                  quality: 'High Res Photo',
+                  size: 'Auto', format: 'JPG', url: item.thumbnail, isImage: true, imageUrl: item.thumbnail, useProxy: true,
+                });
+              }
             }
-          }
-        });
+          });
+        }
+      } catch (e) {
+        console.error('[Snapchat] AIO fallback failed:', e.message);
       }
-    } catch (e) {
-      console.error('[Snapchat] AIO fallback failed:', e.message);
     }
 
     if (options.length > 0) {

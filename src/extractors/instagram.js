@@ -1,5 +1,8 @@
 const { withTimeout, ytdlpGetInfoAsync } = require('./youtube');
-const btch = require('btch-downloader');
+
+// GUARD: btch-downloader may not be available in all environments
+let btch;
+try { btch = require('btch-downloader'); } catch { btch = null; }
 
 /**
  * Extracts Instagram media (posts, reels, stories, carousel).
@@ -117,10 +120,10 @@ const extractInstagram = async (url) => {
       console.error('[Instagram] yt-dlp failed:', err.message);
     }
 
-    // 2. FALLBACK: btch-downloader igdl (reduced timeout from 8s to 5s)
-    try {
+    // 2. FALLBACK: btch-downloader igdl
+    if (btch && btch.igdl) try {
       console.log('[Instagram] FALLBACK: btch igdl...');
-      const igRes = await withTimeout(btch.igdl(url), 5000, 'Instagram IGDL');
+      const igRes = await withTimeout(btch.igdl(url), 8000, 'Instagram IGDL');
 
       // FIX Bug 2 & 11: Filter out empty objects before processing.
       // btch igdl often returns [{}, {}, {}, ...] which wastes CPU cycles.
@@ -180,11 +183,11 @@ const extractInstagram = async (url) => {
       console.error('[Instagram] igdl fallback failed:', e.message);
     }
 
-    // 3. FALLBACK: btch AIO (reduced timeout from 8s to 5s)
-    if (options.length === 0) {
+    // 3. FALLBACK: btch AIO
+    if (options.length === 0 && btch && btch.aio) {
       try {
         console.log('[Instagram] FALLBACK: btch AIO...');
-        const aioRes = await withTimeout(btch.aio(url), 5000, 'Instagram AIO');
+        const aioRes = await withTimeout(btch.aio(url), 10000, 'Instagram AIO');
         if (aioRes && aioRes.data) {
           let vCount = 0;
           let pCount = 0;
