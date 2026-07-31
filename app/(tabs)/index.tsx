@@ -56,7 +56,7 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
 // ========== SERVER CONFIGURATION ==========
 // Backend is deployed on Vercel
 // IMPORTANT: Replace this URL with your exact Vercel deployment URL (e.g., https://my-app-xxx.vercel.app)
-const VERCEL_URL = 'https://my-app-eight-zeta-38.vercel.app';
+const VERCEL_URL = 'https://my-app-gamma-nine-21.vercel.app';
 
 /** Resolves the backend server base URL */
 const getServerBaseUrl = (): string => {

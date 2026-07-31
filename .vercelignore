@@ -1,0 +1,40 @@
+# Mobile app (not needed for backend deployment)
+app/
+android/
+ios/
+assets/
+hooks/
+dist/
+web-build/
+.expo/
+
+# Large binaries (yt-dlp is downloaded during build via vercel-build script)
+yt-dlp.exe
+yt-dlp
+
+# Dev dependencies & build artifacts
+node_modules/
+.gradle/
+.kotlin/
+*.apk
+
+# Config files not needed for backend
+tsconfig.json
+babel.config.js
+eslint.config.js
+expo-env.d.ts
+app.json
+cspell.json
+
+# Docker (not used on Vercel)
+Dockerfile
+.dockerignore
+
+# Misc
+.git/
+.vscode/
+.claude/
+CLAUDE.md
+README.md
+render.yaml
+*.log

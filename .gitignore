@@ -53,3 +53,5 @@ app-release.apk
 # Backend logs
 backend.log
 expo.log
+
+.vercel
