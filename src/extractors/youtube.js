@@ -52,15 +52,46 @@ const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
 };
 
 /**
+ * Generates a temporary Netscape-format cookies.txt file from an Instagram session ID.
+ * yt-dlp's Instagram extractor REQUIRES cookies via --cookies (not --add-header).
+ * Returns the path to the temp file (caller must clean up).
+ */
+const createTempCookieFile = (igSessionId) => {
+  const tempPath = path.resolve(__dirname, '..', '..', `_ig_cookies_${Date.now()}.txt`);
+  // Netscape cookie format: domain  flag  path  secure  expiration  name  value
+  const lines = [
+    '# Netscape HTTP Cookie File',
+    '# This file is auto-generated for yt-dlp Instagram auth',
+    `.instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\t${igSessionId}`,
+    `.instagram.com\tTRUE\t/\tTRUE\t0\tig_did\t${generateUUID()}`,
+  ];
+  fs.writeFileSync(tempPath, lines.join('\n'), 'utf-8');
+  return tempPath;
+};
+
+/** Simple UUID v4 generator for ig_did cookie */
+const generateUUID = () => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  }).toUpperCase();
+};
+
+/**
  * Async yt-dlp JSON extraction with cookie fallback.
  * FIX Bug 7: Only retry on genuine auth errors. Do NOT retry on 404/403/not-found/dpapi/decrypt
  * which are not fixable by cookies and waste 20+ seconds.
  */
 const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igSessionId = null) => {
+  let tempCookieFile = null;
   try {
     const finalArgs = [...extraArgs];
+
+    // If session ID provided, create a proper Netscape cookies file
+    // (--add-header doesn't work for IG — the extractor needs --cookies)
     if (igSessionId) {
-      finalArgs.push('--add-header', `Cookie: sessionid=${igSessionId}`);
+      tempCookieFile = createTempCookieFile(igSessionId);
+      finalArgs.push('--cookies', tempCookieFile);
     }
     return await runYtdlp(url, finalArgs, timeoutMs);
   } catch (err) {
@@ -79,6 +110,12 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igSessi
       msg.includes('400')
     );
     if (!needsAuth) throw err;
+
+    // If igSessionId was already provided, it's the definitive auth — don't waste time on browser cookies
+    if (igSessionId) {
+      console.error('[yt-dlp] Session ID auth failed — the session ID may be invalid or expired.');
+      throw err;
+    }
 
     // Try cookies.txt file if available (fast, no UAC prompts)
     const cookiesPath = path.resolve(__dirname, '..', '..', 'cookies.txt');
@@ -108,6 +145,11 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igSessi
           throw err;
         }
       }
+    }
+  } finally {
+    // Clean up temporary cookie file
+    if (tempCookieFile) {
+      try { fs.unlinkSync(tempCookieFile); } catch (e) {}
     }
   }
 };
@@ -323,5 +365,5 @@ const extractYouTube = async (url, igSessionId = null) => {
   return { success: false, error: 'YouTube extraction failed. All methods exhausted.' };
 };
 
-module.exports = { extractYouTube, withTimeout, ytdlpGetInfoAsync };
+module.exports = { extractYouTube, withTimeout, ytdlpGetInfoAsync, createTempCookieFile };
 

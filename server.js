@@ -8,7 +8,7 @@ const fs = require('fs');
 
 // ── Use the SINGLE canonical yt-dlp helpers from youtube.js extractor
 // This eliminates the duplicate runYtdlp/ytdlpGetInfoAsync that existed here before.
-const { ytdlpGetInfoAsync, withTimeout } = require('./src/extractors/youtube');
+const { ytdlpGetInfoAsync, withTimeout, createTempCookieFile } = require('./src/extractors/youtube');
 
 // ── PERFORMANCE: Hoist btch-downloader at startup instead of lazy-requiring
 // each time a fallback runs (saves ~300ms on first fallback call)
@@ -248,10 +248,11 @@ app.get('/api/media/download', async (req, res) => {
         }
 
         const cookiesPath = path.join(__dirname, 'cookies.txt');
+        let tempIgCookieFile = null;
         if (igSessionId) {
-           args.push('--add-header', `Cookie: sessionid=${igSessionId}`);
-        }
-        if (fs.existsSync(cookiesPath)) {
+           tempIgCookieFile = createTempCookieFile(igSessionId);
+           args.push('--cookies', tempIgCookieFile);
+        } else if (fs.existsSync(cookiesPath)) {
            args.push('--cookies', cookiesPath);
         } else {
            args.push('--cookies-from-browser', 'chrome');
@@ -259,6 +260,9 @@ app.get('/api/media/download', async (req, res) => {
         args.push(ytUrl);
 
         const ytProcess = spawn(ytdlpPath, args, { windowsHide: true });
+        
+        // Clean up temp cookie file when process finishes
+        const cleanupTempFile = () => { if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (e) {} };
         
         if (!needsMerge) {
           ytProcess.stdout.pipe(res);
@@ -272,6 +276,7 @@ app.get('/api/media/download', async (req, res) => {
         });
         
         ytProcess.on('close', (code) => {
+          cleanupTempFile();
           if (needsMerge) {
             if (code === 0 && fs.existsSync(tempFile)) {
               const stat = fs.statSync(tempFile);
@@ -317,10 +322,11 @@ app.get('/api/media/download', async (req, res) => {
         '--no-warnings', '--no-check-certificates'
       ];
       const cookiesPath = path.join(__dirname, 'cookies.txt');
+      let tempIgCookieFile = null;
       if (igSessionId) {
-         args.push('--add-header', `Cookie: sessionid=${igSessionId}`);
-      }
-      if (fs.existsSync(cookiesPath)) {
+         tempIgCookieFile = createTempCookieFile(igSessionId);
+         args.push('--cookies', tempIgCookieFile);
+      } else if (fs.existsSync(cookiesPath)) {
          args.push('--cookies', cookiesPath);
       } else {
          args.push('--cookies-from-browser', 'chrome');
@@ -331,7 +337,10 @@ app.get('/api/media/download', async (req, res) => {
       proc.stdout.pipe(res);
       proc.stderr.on('data', (d) => console.log('yt-dlp:', d.toString().trim()));
       proc.on('error', (err) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
-      proc.on('close', (code) => { if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exit ${code}` }); });
+      proc.on('close', (code) => {
+        if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (e) {}
+        if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exit ${code}` });
+      });
       req.on('close', () => proc.kill());
       return;
     }
