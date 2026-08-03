@@ -188,8 +188,8 @@ export default function HomeScreen() {
     if (opt.playlistFormat) proxyParams.set('playlistFormat', opt.playlistFormat);
     if (opt.genericUrl) proxyParams.set('genericUrl', opt.genericUrl);
     if (directUrl) proxyParams.set('url', directUrl);
-    // Include igSessionId for download endpoint if needed
-    if (opt.igSessionId) proxyParams.set('igSessionId', opt.igSessionId);
+    // Include igCookies for download endpoint if needed
+    if (opt.igCookies) proxyParams.set('igCookies', opt.igCookies);
     
     const proxyUrl = `${baseUrl}/api/media/download?${proxyParams.toString()}`;
 
@@ -378,7 +378,11 @@ export default function HomeScreen() {
     if (urlLower.includes('facebook.com') || urlLower.includes('fb.watch')) return { name: 'logo-facebook' as any, color: '#1877F2', platform: 'facebook' };
     if (urlLower.includes('linkedin.com')) return { name: 'logo-linkedin' as any, color: '#0077B5', platform: 'linkedin' };
     if (urlLower.includes('snapchat.com')) return { name: 'logo-snapchat' as any, color: '#E6C200', platform: 'snapchat' };
-    return { name: 'link-outline' as any, color: '#00E5FF', platform: 'web' };
+    if (urlLower.includes('tiktok.com')) return { name: 'logo-tiktok' as any, color: '#000000', platform: 'tiktok' };
+    if (urlLower.includes('twitter.com') || urlLower.includes('x.com')) return { name: 'logo-twitter' as any, color: '#1DA1F2', platform: 'twitter' };
+    if (urlLower.includes('pinterest.com') || urlLower.includes('pin.it')) return { name: 'logo-pinterest' as any, color: '#E60023', platform: 'pinterest' };
+    if (urlLower.includes('threads.net')) return { name: 'at-circle-outline' as any, color: '#000000', platform: 'threads' };
+    return { name: 'link' as any, color: '#4A5568', platform: 'generic' };
   }, [url]);
 
   const handleAnalyze = useCallback(async () => {
@@ -392,11 +396,11 @@ export default function HomeScreen() {
       
       console.log('Connecting to:', apiUrl);
 
-      // Load Instagram Session ID from AsyncStorage
-      let igSessionId = '';
+      // Load Instagram Cookies from AsyncStorage
+      let igCookies = '';
       try {
-        const storedIgSession = await AsyncStorage.getItem('igSessionId');
-        if (storedIgSession) igSessionId = storedIgSession;
+        const storedCookies = await AsyncStorage.getItem('igCookies');
+        if (storedCookies) igCookies = storedCookies;
       } catch (e) {}
 
       const controller = new AbortController();
@@ -405,7 +409,7 @@ export default function HomeScreen() {
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, igSessionId }),
+        body: JSON.stringify({ url, igCookies }),
         signal: controller.signal,
       });
 
@@ -413,8 +417,8 @@ export default function HomeScreen() {
 
       const data = await response.json();
       if (data.status === 'success') {
-        // Pass the igSessionId down to the download handler by embedding it in the result
-        setResult({ ...data.data, platform: platformInfo.platform, options: data.data.options?.map((opt: any) => ({ ...opt, igSessionId })) });
+        // Pass the igCookies down to the download handler by embedding it in the result
+        setResult({ ...data.data, platform: platformInfo.platform, options: data.data.options?.map((opt: any) => ({ ...opt, igCookies })) });
       } else {
         throw new Error(data.message || 'Extraction failed');
       }

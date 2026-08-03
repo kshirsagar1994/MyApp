@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Switch, ScrollView, TextInput, Appearance, Alert } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Switch, ScrollView, TextInput, Appearance, Alert, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,13 +16,13 @@ export default function SettingsScreen() {
   const [dob, setDob] = useState('01 Jan 2000');
   const [nationality, setNationality] = useState('Indian');
   const [profileAvatar, setProfileAvatar] = useState('https://ui-avatars.com/api/?name=User&background=random');
-  const [igSessionId, setIgSessionId] = useState('');
+  const [igCookies, setIgCookies] = useState('');
 
   useEffect(() => {
     // ── PERFORMANCE: Single multiGet instead of 5 individual getItem calls
     const loadProfile = async () => {
       try {
-        const keys = ['userName', 'userPhone', 'dob', 'nationality', 'profileAvatar', 'igSessionId'];
+        const keys = ['userName', 'userPhone', 'dob', 'nationality', 'profileAvatar', 'igCookies'];
         const results = await AsyncStorage.multiGet(keys);
         const data: Record<string, string | null> = {};
         results.forEach(([key, value]) => { data[key] = value; });
@@ -32,7 +32,7 @@ export default function SettingsScreen() {
         if (data.dob) setDob(data.dob);
         if (data.nationality) setNationality(data.nationality);
         if (data.profileAvatar) setProfileAvatar(data.profileAvatar);
-        if (data.igSessionId) setIgSessionId(data.igSessionId);
+        if (data.igCookies) setIgCookies(data.igCookies);
       } catch (e) {
         // Silent fail — defaults remain
       }
@@ -49,7 +49,7 @@ export default function SettingsScreen() {
           ['userPhone', userPhone],
           ['dob', dob],
           ['nationality', nationality],
-          ['igSessionId', igSessionId],
+          ['igCookies', igCookies],
         ]);
         Alert.alert('Success', 'Profile saved successfully!');
       } catch {
@@ -195,20 +195,27 @@ export default function SettingsScreen() {
          <View style={[styles.settingRow, { flexDirection: 'column', alignItems: 'flex-start', paddingTop: 20 }]}>
             <View style={[styles.settingLabelRow, { marginBottom: 10 }]}>
                <Ionicons name="key" size={22} color={themeColors.text} style={styles.settingIcon} />
-               <Text style={[styles.settingText, { color: themeColors.text }]}>Instagram Session ID</Text>
+               <Text style={[styles.settingText, { color: themeColors.text }]}>Instagram Cookies</Text>
             </View>
+            <Text style={[styles.storagePath, { color: themeColors.subText, marginBottom: 6 }]}>
+               Required to download private posts. Open Instagram in Chrome → F12 → Console → type:
+            </Text>
+            <Text style={[styles.storagePath, { color: '#00E5FF', marginBottom: 6, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 11 }]}>
+               document.cookie
+            </Text>
             <Text style={[styles.storagePath, { color: themeColors.subText, marginBottom: 12 }]}>
-               Required to download private Instagram posts. Paste your 'sessionid' cookie value here.
+               Copy the full output and paste it below.
             </Text>
             <TextInput
-               style={[styles.inputField, { color: themeColors.text, borderColor: themeColors.border, width: '100%', textAlign: 'left', paddingVertical: 10, paddingHorizontal: 12 }]}
-               value={igSessionId}
-               onChangeText={setIgSessionId}
-               placeholder="Paste sessionid here..."
+               style={[styles.inputField, { color: themeColors.text, borderColor: themeColors.border, width: '100%', textAlign: 'left', paddingVertical: 10, paddingHorizontal: 12, minHeight: 60 }]}
+               value={igCookies}
+               onChangeText={setIgCookies}
+               placeholder="sessionid=abc; csrftoken=xyz; ds_user_id=123; ..."
                placeholderTextColor={themeColors.subText}
-               secureTextEntry
+               multiline
+               numberOfLines={3}
                onBlur={() => {
-                 AsyncStorage.setItem('igSessionId', igSessionId).catch(() => {});
+                 AsyncStorage.setItem('igCookies', igCookies).catch(() => {});
                }}
             />
          </View>

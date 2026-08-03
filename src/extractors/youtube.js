@@ -52,29 +52,42 @@ const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
 };
 
 /**
- * Generates a temporary Netscape-format cookies.txt file from an Instagram session ID.
- * yt-dlp's Instagram extractor REQUIRES cookies via --cookies (not --add-header).
- * Returns the path to the temp file (caller must clean up).
+ * Generates a temporary Netscape-format cookies.txt file from a full browser cookie string.
+ * 
+ * Instagram's API requires MULTIPLE cookies (sessionid, csrftoken, ds_user_id, mid, rur, ig_did)
+ * to authenticate — a single sessionid is NOT enough.
+ * 
+ * @param {string} cookieString - Full cookie string from browser, e.g. "sessionid=abc; csrftoken=xyz; ds_user_id=123"
+ * @param {string} domain - Cookie domain (default: .instagram.com)
+ * @returns {string} Path to the temp cookie file (caller must clean up)
  */
-const createTempCookieFile = (igSessionId) => {
-  const tempPath = path.resolve(__dirname, '..', '..', `_ig_cookies_${Date.now()}.txt`);
-  // Netscape cookie format: domain  flag  path  secure  expiration  name  value
+const createTempCookieFile = (cookieString, domain = '.instagram.com') => {
+  const tempPath = path.resolve(__dirname, '..', '..', `_cookies_${Date.now()}.txt`);
   const lines = [
     '# Netscape HTTP Cookie File',
-    '# This file is auto-generated for yt-dlp Instagram auth',
-    `.instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\t${igSessionId}`,
-    `.instagram.com\tTRUE\t/\tTRUE\t0\tig_did\t${generateUUID()}`,
+    '# Auto-generated for yt-dlp authentication',
   ];
+
+  // Parse "name1=value1; name2=value2; ..." into individual cookie entries
+  const cookies = cookieString.split(';').map(c => c.trim()).filter(Boolean);
+  
+  for (const cookie of cookies) {
+    const eqIdx = cookie.indexOf('=');
+    if (eqIdx === -1) continue;
+    const name = cookie.substring(0, eqIdx).trim();
+    const value = cookie.substring(eqIdx + 1).trim();
+    if (!name) continue;
+    // Netscape format: domain  domainFlag  path  secure  expiry  name  value
+    lines.push(`${domain}\tTRUE\t/\tTRUE\t0\t${name}\t${value}`);
+  }
+
+  // If the user only pasted a raw sessionid value (no "=" found), treat it as sessionid
+  if (cookies.length === 0 || (cookies.length === 1 && !cookieString.includes('='))) {
+    lines.push(`${domain}\tTRUE\t/\tTRUE\t0\tsessionid\t${cookieString.trim()}`);
+  }
+
   fs.writeFileSync(tempPath, lines.join('\n'), 'utf-8');
   return tempPath;
-};
-
-/** Simple UUID v4 generator for ig_did cookie */
-const generateUUID = () => {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0;
-    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-  }).toUpperCase();
 };
 
 /**
@@ -82,15 +95,15 @@ const generateUUID = () => {
  * FIX Bug 7: Only retry on genuine auth errors. Do NOT retry on 404/403/not-found/dpapi/decrypt
  * which are not fixable by cookies and waste 20+ seconds.
  */
-const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igSessionId = null) => {
+const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igCookies = null) => {
   let tempCookieFile = null;
   try {
     const finalArgs = [...extraArgs];
 
     // If session ID provided, create a proper Netscape cookies file
     // (--add-header doesn't work for IG — the extractor needs --cookies)
-    if (igSessionId) {
-      tempCookieFile = createTempCookieFile(igSessionId);
+    if (igCookies) {
+      tempCookieFile = createTempCookieFile(igCookies);
       finalArgs.push('--cookies', tempCookieFile);
     }
     return await runYtdlp(url, finalArgs, timeoutMs);
@@ -111,8 +124,8 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igSessi
     );
     if (!needsAuth) throw err;
 
-    // If igSessionId was already provided, it's the definitive auth — don't waste time on browser cookies
-    if (igSessionId) {
+    // If igCookies was already provided, it's the definitive auth — don't waste time on browser cookies
+    if (igCookies) {
       console.error('[yt-dlp] Session ID auth failed — the session ID may be invalid or expired.');
       throw err;
     }
@@ -168,11 +181,11 @@ const withTimeout = (promise, ms, name = 'Operation') => {
  * Extracts YouTube media metadata using async yt-dlp.
  * Falls back to btch-downloader on serverless (Vercel) where yt-dlp is unavailable.
  */
-const extractYouTube = async (url, igSessionId = null) => {
+const extractYouTube = async (url, igCookies = null) => {
   // 1. PRIMARY: yt-dlp (works on Docker/Render/local, skipped on Vercel)
   try {
     console.log('[YouTube Extractor] PRIMARY: yt-dlp extraction:', url);
-    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 20000, igSessionId);
+    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 20000, igCookies);
 
     const videoId = info.id;
     const title = info.title || 'YouTube Media';

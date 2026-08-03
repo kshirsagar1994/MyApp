@@ -22,7 +22,7 @@ const cleanLinkedInUrl = (url) => {
  * Extracts LinkedIn media (videos, images, audio from posts).
  * Uses yt-dlp as PRIMARY, btch AIO as fallback.
  */
-const extractLinkedIn = async (url, igSessionId = null) => {
+const extractLinkedIn = async (url, igCookies = null) => {
   try {
     const options = [];
     const cleanedUrl = cleanLinkedInUrl(url);
@@ -32,11 +32,11 @@ const extractLinkedIn = async (url, igSessionId = null) => {
       console.log('[LinkedIn] PRIMARY: yt-dlp extraction...');
       let info;
       try {
-        info = await ytdlpGetInfoAsync(cleanedUrl, [], 25000, igSessionId);
+        info = await ytdlpGetInfoAsync(cleanedUrl, [], 25000, igCookies);
       } catch (cleanErr) {
         if (cleanedUrl !== url) {
           console.log('[LinkedIn] yt-dlp: cleaned URL failed, trying original...');
-          info = await ytdlpGetInfoAsync(url, [], 25000, igSessionId);
+          info = await ytdlpGetInfoAsync(url, [], 25000, igCookies);
         } else {
           throw cleanErr;
         }

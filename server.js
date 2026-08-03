@@ -94,7 +94,7 @@ try {
 const { analyzeUrl: modularAnalyze } = require('./src/controllers/media.controller');
 
 app.get('/', (_req, res) => {
-  res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'linkedin', 'snapchat'] });
+  res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'linkedin', 'snapchat', 'tiktok', 'twitter', 'pinterest', 'threads'] });
 });
 
 // ===================== ANALYZE ENDPOINT =====================
@@ -186,7 +186,7 @@ async function handleYouTubePlaylist(url, res) {
 
 // ===================== DOWNLOAD / PROXY ENDPOINT =====================
 app.get('/api/media/download', async (req, res) => {
-  const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igSessionId } = req.query;
+  const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igCookies } = req.query;
   if (!mediaUrl && !ytId && !playlistUrl && !genericUrl) {
     return res.status(400).json({ error: 'url, ytId, playlistUrl, or genericUrl param required' });
   }
@@ -249,8 +249,8 @@ app.get('/api/media/download', async (req, res) => {
 
         const cookiesPath = path.join(__dirname, 'cookies.txt');
         let tempIgCookieFile = null;
-        if (igSessionId) {
-           tempIgCookieFile = createTempCookieFile(igSessionId);
+        if (igCookies) {
+           tempIgCookieFile = createTempCookieFile(igCookies);
            args.push('--cookies', tempIgCookieFile);
         } else if (fs.existsSync(cookiesPath)) {
            args.push('--cookies', cookiesPath);
@@ -323,8 +323,8 @@ app.get('/api/media/download', async (req, res) => {
       ];
       const cookiesPath = path.join(__dirname, 'cookies.txt');
       let tempIgCookieFile = null;
-      if (igSessionId) {
-         tempIgCookieFile = createTempCookieFile(igSessionId);
+      if (igCookies) {
+         tempIgCookieFile = createTempCookieFile(igCookies);
          args.push('--cookies', tempIgCookieFile);
       } else if (fs.existsSync(cookiesPath)) {
          args.push('--cookies', cookiesPath);
