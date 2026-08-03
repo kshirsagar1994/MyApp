@@ -10,6 +10,10 @@ const fs = require('fs');
 // This eliminates the duplicate runYtdlp/ytdlpGetInfoAsync that existed here before.
 const { ytdlpGetInfoAsync, withTimeout, createTempCookieFile } = require('./src/extractors/youtube');
 
+// ── Auth & Queue
+const authController = require('./src/controllers/auth.controller');
+const { addDownloadJob } = require('./src/queue/download.queue');
+
 // ── PERFORMANCE: Hoist btch-downloader at startup instead of lazy-requiring
 // each time a fallback runs (saves ~300ms on first fallback call)
 let btch;
@@ -83,6 +87,8 @@ app.use(express.json({ limit: '1mb' }));
 
 // ── PERFORMANCE: Gzip compression — reduces JSON response size by ~70%
 // Critical for mobile networks where /api/media/analyze returns 5-15KB
+app.use('/api/media/serve', express.static(path.join(__dirname, 'temp_downloads')));
+
 try {
   const compression = require('compression');
   app.use(compression());
@@ -95,6 +101,26 @@ const { analyzeUrl: modularAnalyze } = require('./src/controllers/media.controll
 
 app.get('/', (_req, res) => {
   res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'linkedin', 'snapchat', 'tiktok', 'twitter', 'pinterest', 'threads'] });
+});
+
+// ===================== AUTH ENDPOINTS =====================
+app.post('/api/auth/register', authController.register);
+app.post('/api/auth/login', authController.login);
+
+// ===================== QUEUE STATUS ENDPOINT =====================
+const { downloadQueue } = require('./src/queue/download.queue');
+app.get('/api/media/status/:jobId', async (req, res) => {
+  try {
+    const job = await downloadQueue.getJob(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const state = await job.getState();
+    const progress = job.progress;
+    const result = job.returnvalue;
+    const failedReason = job.failedReason;
+    res.json({ id: job.id, state, progress, result, failedReason });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ===================== ANALYZE ENDPOINT =====================
@@ -184,7 +210,40 @@ async function handleYouTubePlaylist(url, res) {
   }
 }
 
-// ===================== DOWNLOAD / PROXY ENDPOINT =====================
+// ===================== ASYNC QUEUE DOWNLOAD ENDPOINT =====================
+app.post('/api/media/download/queue', async (req, res) => {
+  try {
+    const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igCookies } = req.body;
+    if (!mediaUrl && !ytId && !playlistUrl && !genericUrl) {
+      return res.status(400).json({ error: 'url, ytId, playlistUrl, or genericUrl param required' });
+    }
+    const safeName = (filename || 'download').toString().replace(/[^a-zA-Z0-9._-]/g, '_');
+    const urlToDownload = playlistUrl || (ytId ? (ytId.startsWith('http') ? ytId : `https://www.youtube.com/watch?v=${ytId}`) : null) || mediaUrl || genericUrl;
+    
+    let formatArg = itag;
+    let needsMerge = itag && itag.includes('+');
+
+    if (!formatArg) {
+       formatArg = 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best';
+    } else if (itag === 'bestaudio' || safeName.endsWith('.mp3') || safeName.endsWith('.m4a')) {
+       formatArg = 'bestaudio[ext=m4a]/bestaudio';
+    }
+
+    const job = await addDownloadJob({
+       url: urlToDownload,
+       filename: safeName,
+       formatArg,
+       igCookies,
+       needsMerge
+    });
+
+    res.json({ status: 'queued', jobId: job.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== LEGACY DOWNLOAD / PROXY ENDPOINT =====================
 app.get('/api/media/download', async (req, res) => {
   const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igCookies } = req.query;
   if (!mediaUrl && !ytId && !playlistUrl && !genericUrl) {

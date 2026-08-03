@@ -9,6 +9,7 @@ import { documentDirectory, createDownloadResumable } from 'expo-file-system/leg
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import Animated, { FadeInDown } from 'react-native-reanimated';
+import { useAuth } from '../../src/context/AuthContext';
 
 // ── PERFORMANCE: Memoized media option item — prevents all options from
 // re-rendering when download progress triggers activeDownloads state change
@@ -179,7 +180,7 @@ export default function HomeScreen() {
     };
     setActiveDownloads(prev => [...prev, newDownload]);
 
-    // Build proxy URL
+    // Build proxy URL parameters
     const baseUrl = getServerBaseUrl();
     const proxyParams = new URLSearchParams({ filename: fileName });
     if (opt.ytId) proxyParams.set('ytId', opt.ytId);
@@ -188,68 +189,12 @@ export default function HomeScreen() {
     if (opt.playlistFormat) proxyParams.set('playlistFormat', opt.playlistFormat);
     if (opt.genericUrl) proxyParams.set('genericUrl', opt.genericUrl);
     if (directUrl) proxyParams.set('url', directUrl);
-    // Include igCookies for download endpoint if needed
     if (opt.igCookies) proxyParams.set('igCookies', opt.igCookies);
     
-    const proxyUrl = `${baseUrl}/api/media/download?${proxyParams.toString()}`;
-
-    // Decide which URL to actually download from
     const shouldUseProxy = opt.useProxy || Platform.OS === 'web';
-    const downloadUrl = shouldUseProxy ? proxyUrl : directUrl;
+    let finalDownloadUrl = shouldUseProxy ? '' : directUrl; // If direct, we use directUrl
 
-    // ===== WEB DOWNLOAD =====
-    if (Platform.OS === 'web') {
-      try {
-        const progressInterval = setInterval(() => {
-          setActiveDownloads(prev => prev.map(d => {
-            if (d.id === newDownload.id && d.progress < 90) {
-              return { ...d, progress: d.progress + 10, speed: 'Downloading...' };
-            }
-            return d;
-          }));
-        }, 500);
-
-        const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-        
-        const blob = await response.blob();
-        clearInterval(progressInterval);
-        
-        setActiveDownloads(prev => prev.map(d => d.id === newDownload.id ? { ...d, progress: 100, speed: 'Complete!' } : d));
-        
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(blobUrl);
-        
-        setTimeout(() => {
-          setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
-        }, 1500);
-
-        const data = await AsyncStorage.getItem('downloads');
-        const existing = data ? JSON.parse(data) : [];
-        const completed = {
-          id: newDownload.id,
-          title: fileName,
-          status: 'completed',
-          type: finalExt === '.jpg' ? 'image' : finalExt === '.mp3' ? 'music' : 'video',
-          size: blob.size ? (blob.size / 1024 / 1024).toFixed(1) + ' MB' : (opt.size || 'HQ'),
-        };
-        await AsyncStorage.setItem('downloads', JSON.stringify([completed, ...existing]));
-        Alert.alert('Download complete! ✅', 'File saved.');
-      } catch (e: any) {
-        console.error('Web download error:', e);
-        Alert.alert('Download Failed ❌', e.message);
-        setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
-      }
-      return;
-    }
-
-    // ===== NATIVE DOWNLOAD (Android/iOS) =====
+    // ===== QUEUE & NATIVE DOWNLOAD LOGIC =====
     const fileUri = (documentDirectory || '') + fileName;
     const downloadHeaders: any = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -258,38 +203,79 @@ export default function HomeScreen() {
       downloadHeaders['Referer'] = 'https://www.instagram.com/';
     }
 
-    const downloadResumable = createDownloadResumable(
-      downloadUrl,
-      fileUri,
-      { headers: downloadHeaders },
-      (downloadProgress) => {
-        // ── PERFORMANCE: Throttle to max 3 updates/sec
-        const now = Date.now();
-        const lastUpdate = lastProgressUpdate.current[newDownload.id] || 0;
-        if (now - lastUpdate < 333) return; // Skip if less than 333ms since last update
-        lastProgressUpdate.current[newDownload.id] = now;
-
-        const totalExpected = downloadProgress.totalBytesExpectedToWrite;
-        const totalWritten = downloadProgress.totalBytesWritten;
-        // totalExpected can be -1 for chunked/streamed downloads (like yt-dlp output)
-        const progress = totalExpected > 0 ? Math.round((totalWritten / totalExpected) * 100) : -1;
-        const speed = (totalWritten / 1024 / 1024).toFixed(2) + ' MB';
-        setActiveDownloads(prev => prev.map(d =>
-          d.id === newDownload.id && !d.isPaused
-            ? { ...d, progress: progress >= 0 ? progress : 0, speed: progress >= 0 ? `${speed} (${progress}%)` : `${speed} downloaded` }
-            : d
-        ));
-      }
-    );
-
-    downloadTasks.current[newDownload.id] = downloadResumable;
-
     try {
+      if (shouldUseProxy) {
+        // 1. Enqueue job via Backend Queue System
+        const response = await fetch(`${baseUrl}/api/media/download/queue`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: fileName, ytId: opt.ytId, itag: opt.itag, playlistUrl: opt.playlistUrl,
+            playlistFormat: opt.playlistFormat, genericUrl: opt.genericUrl, url: directUrl, igCookies: opt.igCookies
+          })
+        });
+        const data = await response.json();
+        
+        if (!response.ok || !data.jobId) {
+           throw new Error(data.error || 'Failed to queue download');
+        }
+
+        const jobId = data.jobId;
+        console.log('Queued job:', jobId);
+
+        // 2. Poll for completion
+        let jobCompleted = false;
+        while (!jobCompleted) {
+           await new Promise(resolve => setTimeout(resolve, 2000));
+           const statusRes = await fetch(`${baseUrl}/api/media/status/${jobId}`);
+           const statusData = await statusRes.json();
+           
+           if (statusData.state === 'failed') throw new Error(statusData.failedReason || 'Job failed on server');
+           
+           if (statusData.state === 'completed' && statusData.result?.downloadUrl) {
+             finalDownloadUrl = `${baseUrl}${statusData.result.downloadUrl}`;
+             jobCompleted = true;
+           } else {
+             // Update progress based on backend queue progress
+             setActiveDownloads(prev => prev.map(d =>
+               d.id === newDownload.id && !d.isPaused
+                 ? { ...d, progress: statusData.progress || 0, speed: `Processing on Server (${statusData.progress || 0}%)` }
+                 : d
+             ));
+           }
+        }
+      }
+
+      // 3. Perform final local download
+      setActiveDownloads(prev => prev.map(d => d.id === newDownload.id ? { ...d, progress: 100, speed: 'Saving file...' } : d));
+      
+      if (Platform.OS === 'web') {
+          // Fallback web fetch handling for queued final URL
+          const res = await fetch(finalDownloadUrl);
+          const blob = await res.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(blobUrl);
+          
+          setTimeout(() => { setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id)); }, 1500);
+          return;
+      }
+
+      const downloadResumable = createDownloadResumable(
+        finalDownloadUrl,
+        fileUri,
+        { headers: downloadHeaders }
+      );
+      
+      downloadTasks.current[newDownload.id] = downloadResumable;
       const downloadResult = await downloadResumable.downloadAsync();
       
-      // If it was cancelled, the task is removed from activeDownloads already, so just return
-      if (!downloadTasks.current[newDownload.id]) return;
-
+      if (!downloadTasks.current[newDownload.id]) return; // Cancelled
       delete downloadTasks.current[newDownload.id];
       setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
       
