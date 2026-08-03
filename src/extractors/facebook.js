@@ -30,7 +30,7 @@ const normalizeFacebookUrl = (url) => {
  * Extracts Facebook media (videos, images, audio).
  * Uses yt-dlp as PRIMARY, btch fbdown as FALLBACK 1, btch AIO as FALLBACK 2.
  */
-const extractFacebook = async (url) => {
+const extractFacebook = async (url, igSessionId = null) => {
   try {
     const options = [];
     const normalizedUrl = normalizeFacebookUrl(url);
@@ -40,12 +40,12 @@ const extractFacebook = async (url) => {
       console.log('[Facebook] PRIMARY: yt-dlp extraction...');
       let info;
       try {
-        info = await ytdlpGetInfoAsync(normalizedUrl, [], 25000);
+        info = await ytdlpGetInfoAsync(normalizedUrl, [], 25000, igSessionId);
       } catch (normErr) {
         // If normalized URL failed and it's different from original, try original
         if (normalizedUrl !== url) {
           console.log('[Facebook] yt-dlp: normalized URL failed, trying original...');
-          info = await ytdlpGetInfoAsync(url, [], 25000);
+          info = await ytdlpGetInfoAsync(url, [], 25000, igSessionId);
         } else {
           throw normErr;
         }

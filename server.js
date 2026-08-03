@@ -186,7 +186,7 @@ async function handleYouTubePlaylist(url, res) {
 
 // ===================== DOWNLOAD / PROXY ENDPOINT =====================
 app.get('/api/media/download', async (req, res) => {
-  const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl } = req.query;
+  const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igSessionId } = req.query;
   if (!mediaUrl && !ytId && !playlistUrl && !genericUrl) {
     return res.status(400).json({ error: 'url, ytId, playlistUrl, or genericUrl param required' });
   }
@@ -248,6 +248,9 @@ app.get('/api/media/download', async (req, res) => {
         }
 
         const cookiesPath = path.join(__dirname, 'cookies.txt');
+        if (igSessionId) {
+           args.push('--add-header', `Cookie: sessionid=${igSessionId}`);
+        }
         if (fs.existsSync(cookiesPath)) {
            args.push('--cookies', cookiesPath);
         } else {
@@ -314,6 +317,9 @@ app.get('/api/media/download', async (req, res) => {
         '--no-warnings', '--no-check-certificates'
       ];
       const cookiesPath = path.join(__dirname, 'cookies.txt');
+      if (igSessionId) {
+         args.push('--add-header', `Cookie: sessionid=${igSessionId}`);
+      }
       if (fs.existsSync(cookiesPath)) {
          args.push('--cookies', cookiesPath);
       } else {

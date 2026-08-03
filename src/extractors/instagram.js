@@ -8,14 +8,14 @@ try { btch = require('btch-downloader'); } catch { btch = null; }
  * Extracts Instagram media (posts, reels, stories, carousel).
  * Uses yt-dlp as PRIMARY (reliable), btch-downloader as fallback.
  */
-const extractInstagram = async (url) => {
+const extractInstagram = async (url, igSessionId = null) => {
   try {
     const options = [];
 
     // 1. PRIMARY: yt-dlp (supports Instagram posts, reels, stories)
     try {
       console.log('[Instagram] PRIMARY: yt-dlp extraction...');
-      const info = await ytdlpGetInfoAsync(url, [], 20000);
+      const info = await ytdlpGetInfoAsync(url, [], 20000, igSessionId);
 
       const title = info.title || 'Instagram Post/Reel';
       const thumbnail = info.thumbnail || (info.entries && info.entries[0]?.thumbnail) || '';

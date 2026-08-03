@@ -188,6 +188,9 @@ export default function HomeScreen() {
     if (opt.playlistFormat) proxyParams.set('playlistFormat', opt.playlistFormat);
     if (opt.genericUrl) proxyParams.set('genericUrl', opt.genericUrl);
     if (directUrl) proxyParams.set('url', directUrl);
+    // Include igSessionId for download endpoint if needed
+    if (opt.igSessionId) proxyParams.set('igSessionId', opt.igSessionId);
+    
     const proxyUrl = `${baseUrl}/api/media/download?${proxyParams.toString()}`;
 
     // Decide which URL to actually download from
@@ -389,13 +392,20 @@ export default function HomeScreen() {
       
       console.log('Connecting to:', apiUrl);
 
+      // Load Instagram Session ID from AsyncStorage
+      let igSessionId = '';
+      try {
+        const storedIgSession = await AsyncStorage.getItem('igSessionId');
+        if (storedIgSession) igSessionId = storedIgSession;
+      } catch (e) {}
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout — Render free tier cold starts can take 50+ seconds
 
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, igSessionId }),
         signal: controller.signal,
       });
 
@@ -403,7 +413,8 @@ export default function HomeScreen() {
 
       const data = await response.json();
       if (data.status === 'success') {
-        setResult({ ...data.data, platform: platformInfo.platform });
+        // Pass the igSessionId down to the download handler by embedding it in the result
+        setResult({ ...data.data, platform: platformInfo.platform, options: data.data.options?.map((opt: any) => ({ ...opt, igSessionId })) });
       } else {
         throw new Error(data.message || 'Extraction failed');
       }

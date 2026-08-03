@@ -22,7 +22,7 @@ const cleanSnapchatUrl = (url) => {
  * Extracts Snapchat media (stories, spotlight videos, images).
  * Uses yt-dlp as PRIMARY, btch AIO as fallback.
  */
-const extractSnapchat = async (url) => {
+const extractSnapchat = async (url, igSessionId = null) => {
   try {
     const options = [];
     const cleanedUrl = cleanSnapchatUrl(url);
@@ -32,11 +32,11 @@ const extractSnapchat = async (url) => {
       console.log('[Snapchat] PRIMARY: yt-dlp extraction...');
       let info;
       try {
-        info = await ytdlpGetInfoAsync(cleanedUrl, [], 25000);
+        info = await ytdlpGetInfoAsync(cleanedUrl, [], 25000, igSessionId);
       } catch (cleanErr) {
         if (cleanedUrl !== url) {
           console.log('[Snapchat] yt-dlp: cleaned URL failed, trying original...');
-          info = await ytdlpGetInfoAsync(url, [], 25000);
+          info = await ytdlpGetInfoAsync(url, [], 25000, igSessionId);
         } else {
           throw cleanErr;
         }

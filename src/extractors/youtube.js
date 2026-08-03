@@ -56,9 +56,13 @@ const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
  * FIX Bug 7: Only retry on genuine auth errors. Do NOT retry on 404/403/not-found/dpapi/decrypt
  * which are not fixable by cookies and waste 20+ seconds.
  */
-const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000) => {
+const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igSessionId = null) => {
   try {
-    return await runYtdlp(url, extraArgs, timeoutMs);
+    const finalArgs = [...extraArgs];
+    if (igSessionId) {
+      finalArgs.push('--add-header', `Cookie: sessionid=${igSessionId}`);
+    }
+    return await runYtdlp(url, finalArgs, timeoutMs);
   } catch (err) {
     const msg = err.message ? err.message.toLowerCase() : '';
     // Expand retry to include 404, 403, 401, 400, etc., as private posts often return these
@@ -81,7 +85,7 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000) => {
     if (fs.existsSync(cookiesPath)) {
       console.log('[yt-dlp] Auth error — retrying with cookies.txt...');
       try {
-        return await runYtdlp(url, ['--cookies', cookiesPath, ...extraArgs], timeoutMs);
+        return await runYtdlp(url, ['--cookies', cookiesPath, ...finalArgs], timeoutMs);
       } catch (cookieTxtErr) {
         console.error('[yt-dlp] cookies.txt retry failed:', cookieTxtErr.message);
       }
@@ -90,15 +94,15 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000) => {
     // Attempt to use Chrome cookies for private profiles
     console.log('[yt-dlp] Auth error — retrying with Chrome cookies...');
     try {
-      return await runYtdlp(url, ['--cookies-from-browser', 'chrome', ...extraArgs], timeoutMs + 5000);
+      return await runYtdlp(url, ['--cookies-from-browser', 'chrome', ...finalArgs], timeoutMs + 5000);
     } catch (chromeErr) {
       console.error('[yt-dlp] Chrome cookies failed, trying Edge...');
       try {
-        return await runYtdlp(url, ['--cookies-from-browser', 'edge', ...extraArgs], timeoutMs + 5000);
+        return await runYtdlp(url, ['--cookies-from-browser', 'edge', ...finalArgs], timeoutMs + 5000);
       } catch (edgeErr) {
         console.error('[yt-dlp] Edge cookies failed, trying Firefox...');
         try {
-          return await runYtdlp(url, ['--cookies-from-browser', 'firefox', ...extraArgs], timeoutMs + 5000);
+          return await runYtdlp(url, ['--cookies-from-browser', 'firefox', ...finalArgs], timeoutMs + 5000);
         } catch (firefoxErr) {
           console.error('[yt-dlp] Firefox cookies failed.');
           throw err;
@@ -122,11 +126,11 @@ const withTimeout = (promise, ms, name = 'Operation') => {
  * Extracts YouTube media metadata using async yt-dlp.
  * Falls back to btch-downloader on serverless (Vercel) where yt-dlp is unavailable.
  */
-const extractYouTube = async (url) => {
+const extractYouTube = async (url, igSessionId = null) => {
   // 1. PRIMARY: yt-dlp (works on Docker/Render/local, skipped on Vercel)
   try {
     console.log('[YouTube Extractor] PRIMARY: yt-dlp extraction:', url);
-    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 20000);
+    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 20000, igSessionId);
 
     const videoId = info.id;
     const title = info.title || 'YouTube Media';

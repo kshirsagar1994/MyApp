@@ -29,7 +29,7 @@ const detectPlatform = (url) => {
 };
 
 const analyzeUrl = async (req, res) => {
-  const { url } = req.body;
+  const { url, igSessionId } = req.body;
 
   if (!url) {
     return res.status(400).json({ status: 'error', message: 'URL is required' });
@@ -42,23 +42,23 @@ const analyzeUrl = async (req, res) => {
     switch (platform) {
       case 'youtube':
         if (!extractYouTube) return res.status(500).json({ status: 'error', message: 'YouTube extractor is unavailable. Server configuration error.' });
-        result = await extractYouTube(url);
+        result = await extractYouTube(url, igSessionId);
         break;
       case 'instagram':
         if (!extractInstagram) return res.status(500).json({ status: 'error', message: 'Instagram extractor is unavailable. Server configuration error.' });
-        result = await extractInstagram(url);
+        result = await extractInstagram(url, igSessionId);
         break;
       case 'facebook':
         if (!extractFacebook) return res.status(500).json({ status: 'error', message: 'Facebook extractor is unavailable. Server configuration error.' });
-        result = await extractFacebook(url);
+        result = await extractFacebook(url, igSessionId);
         break;
       case 'snapchat':
         if (!extractSnapchat) return res.status(500).json({ status: 'error', message: 'Snapchat extractor is unavailable. Server configuration error.' });
-        result = await extractSnapchat(url);
+        result = await extractSnapchat(url, igSessionId);
         break;
       case 'linkedin':
         if (!extractLinkedIn) return res.status(500).json({ status: 'error', message: 'LinkedIn extractor is unavailable. Server configuration error.' });
-        result = await extractLinkedIn(url);
+        result = await extractLinkedIn(url, igSessionId);
         break;
       default:
         result = { success: false, error: `Unsupported platform. Supported: YouTube, Instagram, Facebook, Snapchat, LinkedIn.` };
