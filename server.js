@@ -41,6 +41,8 @@ const ytdlpGetPlaylistAsync = (url, timeoutMs = 30000) => {
     const cookiesPath = path.join(__dirname, 'cookies.txt');
     if (fs.existsSync(cookiesPath)) {
       args.push('--cookies', cookiesPath);
+    } else {
+      args.push('--cookies-from-browser', 'chrome');
     }
     args.push(url);
     const proc = spawn(ytdlpPath, args, { windowsHide: true });
@@ -248,6 +250,8 @@ app.get('/api/media/download', async (req, res) => {
         const cookiesPath = path.join(__dirname, 'cookies.txt');
         if (fs.existsSync(cookiesPath)) {
            args.push('--cookies', cookiesPath);
+        } else {
+           args.push('--cookies-from-browser', 'chrome');
         }
         args.push(ytUrl);
 
@@ -312,6 +316,8 @@ app.get('/api/media/download', async (req, res) => {
       const cookiesPath = path.join(__dirname, 'cookies.txt');
       if (fs.existsSync(cookiesPath)) {
          args.push('--cookies', cookiesPath);
+      } else {
+         args.push('--cookies-from-browser', 'chrome');
       }
       args.push(genericUrl);
 
@@ -387,6 +393,8 @@ function handlePlaylistDownload(playlistUrl, format, safeName, req, res) {
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   if (fs.existsSync(cookiesPath)) {
      args.push('--cookies', cookiesPath);
+  } else {
+     args.push('--cookies-from-browser', 'chrome');
   }
   args.push(playlistUrl);
 

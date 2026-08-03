@@ -61,14 +61,18 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000) => {
     return await runYtdlp(url, extraArgs, timeoutMs);
   } catch (err) {
     const msg = err.message ? err.message.toLowerCase() : '';
-    // Only retry if it's genuinely an auth/login issue
+    // Expand retry to include 404, 403, 401, 400, etc., as private posts often return these
     const needsAuth = msg && (
       msg.includes('login') ||
       msg.includes('cookies') ||
       msg.includes('authentication') ||
       msg.includes('private') ||
       msg.includes('empty media response') ||
-      msg.includes('instagram api is not granting access')
+      msg.includes('instagram api is not granting access') ||
+      msg.includes('404') || msg.includes('not found') ||
+      msg.includes('403') || msg.includes('forbidden') ||
+      msg.includes('401') || msg.includes('unauthorized') ||
+      msg.includes('400')
     );
     if (!needsAuth) throw err;
 
@@ -80,15 +84,27 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000) => {
         return await runYtdlp(url, ['--cookies', cookiesPath, ...extraArgs], timeoutMs);
       } catch (cookieTxtErr) {
         console.error('[yt-dlp] cookies.txt retry failed:', cookieTxtErr.message);
-        throw cookieTxtErr;
       }
     }
     
-    // No cookies.txt and auth required — fail immediately
-    // We intentionally SKIP --cookies-from-browser because recent Chrome/Edge versions 
-    // use App-Bound encryption on Windows, which causes yt-dlp to completely hang 
-    // waiting for UAC prompts or decryption, leading to massive timeouts.
-    throw err;
+    // Attempt to use Chrome cookies for private profiles
+    console.log('[yt-dlp] Auth error — retrying with Chrome cookies...');
+    try {
+      return await runYtdlp(url, ['--cookies-from-browser', 'chrome', ...extraArgs], timeoutMs + 5000);
+    } catch (chromeErr) {
+      console.error('[yt-dlp] Chrome cookies failed, trying Edge...');
+      try {
+        return await runYtdlp(url, ['--cookies-from-browser', 'edge', ...extraArgs], timeoutMs + 5000);
+      } catch (edgeErr) {
+        console.error('[yt-dlp] Edge cookies failed, trying Firefox...');
+        try {
+          return await runYtdlp(url, ['--cookies-from-browser', 'firefox', ...extraArgs], timeoutMs + 5000);
+        } catch (firefoxErr) {
+          console.error('[yt-dlp] Firefox cookies failed.');
+          throw err;
+        }
+      }
+    }
   }
 };
 
