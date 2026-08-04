@@ -3,13 +3,12 @@ import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Platfo
 import { Ionicons } from '@expo/vector-icons';
 
 import { LinearGradient } from 'expo-linear-gradient';
-import Constants from 'expo-constants';
+// Constants removed
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { documentDirectory, createDownloadResumable } from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { useAuth } from '../../src/context/AuthContext';
 
 // ── PERFORMANCE: Memoized media option item — prevents all options from
 // re-rendering when download progress triggers activeDownloads state change
@@ -53,6 +52,7 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
     </View>
   </View>
 ));
+MediaOptionItem.displayName = 'MediaOptionItem';
 
 // ========== SERVER CONFIGURATION ==========
 // Backend is deployed on Vercel
@@ -60,11 +60,15 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
 const VERCEL_URL = 'https://my-app-gamma-nine-21.vercel.app';
 
 /** Resolves the backend server base URL */
-const getServerBaseUrl = (): string => {
-  // If running in local development mode (Expo Go), automatically use your computer's IP address and Port 3000
-  if (__DEV__ && Constants.expoConfig?.hostUri) {
-    const localIp = Constants.expoConfig.hostUri.split(':')[0];
-    return `http://${localIp}:3000`; 
+export const getServerBaseUrl = (): string => {
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL;
+  }
+
+  if (__DEV__) {
+    // We have set up ADB reverse proxy (adb reverse tcp:3000 tcp:3000)
+    // so the physical Android device can talk to localhost natively.
+    return 'http://localhost:3000';
   }
   return VERCEL_URL;
 };
@@ -91,9 +95,7 @@ export default function HomeScreen() {
     secondary: '#10B981',
   }), [isDark]);
 
-  // ── PERFORMANCE: Throttle ref to prevent download progress from firing
-  // 30-60 times/sec — limits to max 3 updates/sec (saves ~90% re-renders)
-  const lastProgressUpdate = useRef<Record<string, number>>({});
+  // ── PERFORMANCE: Throttle ref (unused removed)
   
   // ── DOWNLOAD CONTROL: Store resumable instances to allow pause/cancel
   const downloadTasks = useRef<Record<string, any>>({});
@@ -131,7 +133,7 @@ export default function HomeScreen() {
         const mimeType = finalExt === '.jpg' ? 'image/jpeg' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'audio/mp4' : 'video/mp4';
         const UTI = finalExt === '.jpg' ? 'public.jpeg' : (finalExt === '.m4a' || finalExt === '.mp3') ? 'public.mpeg-4-audio' : 'public.mpeg-4';
         await Sharing.shareAsync(fileUri, { mimeType, UTI }); 
-      } catch (_) {}
+      } catch {}
     }
   }, []);
 
@@ -205,45 +207,18 @@ export default function HomeScreen() {
 
     try {
       if (shouldUseProxy) {
-        // 1. Enqueue job via Backend Queue System
-        const response = await fetch(`${baseUrl}/api/media/download/queue`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filename: fileName, ytId: opt.ytId, itag: opt.itag, playlistUrl: opt.playlistUrl,
-            playlistFormat: opt.playlistFormat, genericUrl: opt.genericUrl, url: directUrl, igCookies: opt.igCookies
-          })
-        });
-        const data = await response.json();
-        
-        if (!response.ok || !data.jobId) {
-           throw new Error(data.error || 'Failed to queue download');
-        }
+        // Use direct proxy download instead of queue
+        const params = new URLSearchParams();
+        if (fileName) params.append('filename', fileName);
+        if (opt.ytId) params.append('ytId', opt.ytId);
+        if (opt.itag) params.append('itag', opt.itag);
+        if (opt.playlistUrl) params.append('playlistUrl', opt.playlistUrl);
+        if (opt.playlistFormat) params.append('playlistFormat', opt.playlistFormat);
+        if (opt.genericUrl) params.append('genericUrl', opt.genericUrl);
+        if (directUrl) params.append('url', directUrl);
+        if (opt.igCookies) params.append('igCookies', opt.igCookies);
 
-        const jobId = data.jobId;
-        console.log('Queued job:', jobId);
-
-        // 2. Poll for completion
-        let jobCompleted = false;
-        while (!jobCompleted) {
-           await new Promise(resolve => setTimeout(resolve, 2000));
-           const statusRes = await fetch(`${baseUrl}/api/media/status/${jobId}`);
-           const statusData = await statusRes.json();
-           
-           if (statusData.state === 'failed') throw new Error(statusData.failedReason || 'Job failed on server');
-           
-           if (statusData.state === 'completed' && statusData.result?.downloadUrl) {
-             finalDownloadUrl = `${baseUrl}${statusData.result.downloadUrl}`;
-             jobCompleted = true;
-           } else {
-             // Update progress based on backend queue progress
-             setActiveDownloads(prev => prev.map(d =>
-               d.id === newDownload.id && !d.isPaused
-                 ? { ...d, progress: statusData.progress || 0, speed: `Processing on Server (${statusData.progress || 0}%)` }
-                 : d
-             ));
-           }
-        }
+        finalDownloadUrl = `${baseUrl}/api/media/download?${params.toString()}`;
       }
 
       // 3. Perform final local download
@@ -334,7 +309,7 @@ export default function HomeScreen() {
     if (!task) return;
     try {
       await task.cancelAsync();
-    } catch (e) {}
+    } catch {}
     delete downloadTasks.current[id];
     setActiveDownloads(prev => prev.filter(d => d.id !== id));
   };
@@ -387,7 +362,7 @@ export default function HomeScreen() {
       try {
         const storedCookies = await AsyncStorage.getItem('igCookies');
         if (storedCookies) igCookies = storedCookies;
-      } catch (e) {}
+      } catch {}
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout — Render free tier cold starts can take 50+ seconds
@@ -401,7 +376,19 @@ export default function HomeScreen() {
 
       clearTimeout(timeoutId);
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        // If the server returns HTML (e.g. Vercel Application Error) instead of JSON
+        throw new Error(
+          response.status !== 200 
+            ? `Server error (${response.status}): ${responseText.substring(0, 60).replace(/<[^>]+>/g, '').trim()}...`
+            : 'Server returned an invalid response. Please check your backend connection.'
+        );
+      }
+
       if (data.status === 'success') {
         // Pass the igCookies down to the download handler by embedding it in the result
         setResult({ ...data.data, platform: platformInfo.platform, options: data.data.options?.map((opt: any) => ({ ...opt, igCookies })) });

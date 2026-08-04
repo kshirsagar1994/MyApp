@@ -1,3 +1,4 @@
+/* global __dirname */
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -63,6 +64,12 @@ const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
  */
 const createTempCookieFile = (cookieString, domain = '.instagram.com') => {
   const tempPath = path.resolve(__dirname, '..', '..', `_cookies_${Date.now()}.txt`);
+
+  if (cookieString.includes('# Netscape HTTP Cookie File')) {
+    fs.writeFileSync(tempPath, cookieString, 'utf-8');
+    return tempPath;
+  }
+
   const lines = [
     '# Netscape HTTP Cookie File',
     '# Auto-generated for yt-dlp authentication',
@@ -97,9 +104,8 @@ const createTempCookieFile = (cookieString, domain = '.instagram.com') => {
  */
 const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igCookies = null) => {
   let tempCookieFile = null;
+  const finalArgs = [...extraArgs];
   try {
-    const finalArgs = [...extraArgs];
-
     // If session ID provided, create a proper Netscape cookies file
     // (--add-header doesn't work for IG — the extractor needs --cookies)
     if (igCookies) {
@@ -141,28 +147,12 @@ const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igCooki
       }
     }
     
-    // Attempt to use Chrome cookies for private profiles
-    console.log('[yt-dlp] Auth error — retrying with Chrome cookies...');
-    try {
-      return await runYtdlp(url, ['--cookies-from-browser', 'chrome', ...finalArgs], timeoutMs + 5000);
-    } catch (chromeErr) {
-      console.error('[yt-dlp] Chrome cookies failed, trying Edge...');
-      try {
-        return await runYtdlp(url, ['--cookies-from-browser', 'edge', ...finalArgs], timeoutMs + 5000);
-      } catch (edgeErr) {
-        console.error('[yt-dlp] Edge cookies failed, trying Firefox...');
-        try {
-          return await runYtdlp(url, ['--cookies-from-browser', 'firefox', ...finalArgs], timeoutMs + 5000);
-        } catch (firefoxErr) {
-          console.error('[yt-dlp] Firefox cookies failed.');
-          throw err;
-        }
-      }
-    }
+    // Auth failed and no cookies provided
+    throw err;
   } finally {
     // Clean up temporary cookie file
     if (tempCookieFile) {
-      try { fs.unlinkSync(tempCookieFile); } catch (e) {}
+      try { fs.unlinkSync(tempCookieFile); } catch (_e) {}
     }
   }
 };

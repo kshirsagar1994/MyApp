@@ -53,7 +53,8 @@
           "savePhotosPermission": "Allow saving files",
           "isAccessMediaLocationEnabled": true
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

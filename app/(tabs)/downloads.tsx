@@ -44,6 +44,7 @@ const DownloadItem = React.memo(({ item, themeColors, isDark, onPlay, onShare, o
     </View>
   </View>
 ));
+DownloadItem.displayName = 'DownloadItem';
 
 export default function DownloadsScreen() {
   const [search, setSearch] = useState('');
@@ -73,7 +74,7 @@ export default function DownloadsScreen() {
           } else {
             setDownloads([]);
           }
-        } catch (error) {
+        } catch {
           // Silent fail — empty state shown
         }
       };
@@ -121,7 +122,7 @@ export default function DownloadsScreen() {
       } else {
         Alert.alert('Unavailable', 'Sharing is not available on this device');
       }
-    } catch (e) {
+    } catch {
       // Silent fail
     }
   }, []);

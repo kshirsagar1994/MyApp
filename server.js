@@ -1,4 +1,5 @@
 /* global __dirname */
+require('dotenv').config({ override: true });
 const express = require('express');
 const cors = require('cors');
 const { Readable } = require('stream');
@@ -8,16 +9,14 @@ const fs = require('fs');
 
 // ── Use the SINGLE canonical yt-dlp helpers from youtube.js extractor
 // This eliminates the duplicate runYtdlp/ytdlpGetInfoAsync that existed here before.
-const { ytdlpGetInfoAsync, withTimeout, createTempCookieFile } = require('./src/extractors/youtube');
+const { createTempCookieFile } = require('./src/extractors/youtube');
 
-// ── Auth & Queue
-const authController = require('./src/controllers/auth.controller');
-const { addDownloadJob } = require('./src/queue/download.queue');
+// ── Auth
+// Auth controller removed
 
 // ── PERFORMANCE: Hoist btch-downloader at startup instead of lazy-requiring
 // each time a fallback runs (saves ~300ms on first fallback call)
-let btch;
-try { btch = require('btch-downloader'); } catch { btch = null; }
+// Removed unused btch-downloader require
 
 const PRO_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -103,25 +102,9 @@ app.get('/', (_req, res) => {
   res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'linkedin', 'snapchat', 'tiktok', 'twitter', 'pinterest', 'threads'] });
 });
 
-// ===================== AUTH ENDPOINTS =====================
-app.post('/api/auth/register', authController.register);
-app.post('/api/auth/login', authController.login);
+// ===================== AUTH ENDPOINTS REMOVED =====================
 
-// ===================== QUEUE STATUS ENDPOINT =====================
-const { downloadQueue } = require('./src/queue/download.queue');
-app.get('/api/media/status/:jobId', async (req, res) => {
-  try {
-    const job = await downloadQueue.getJob(req.params.jobId);
-    if (!job) return res.status(404).json({ error: 'Job not found' });
-    const state = await job.getState();
-    const progress = job.progress;
-    const result = job.returnvalue;
-    const failedReason = job.failedReason;
-    res.json({ id: job.id, state, progress, result, failedReason });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+
 
 // ===================== ANALYZE ENDPOINT =====================
 app.post('/api/media/analyze', async (req, res) => {
@@ -210,38 +193,6 @@ async function handleYouTubePlaylist(url, res) {
   }
 }
 
-// ===================== ASYNC QUEUE DOWNLOAD ENDPOINT =====================
-app.post('/api/media/download/queue', async (req, res) => {
-  try {
-    const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igCookies } = req.body;
-    if (!mediaUrl && !ytId && !playlistUrl && !genericUrl) {
-      return res.status(400).json({ error: 'url, ytId, playlistUrl, or genericUrl param required' });
-    }
-    const safeName = (filename || 'download').toString().replace(/[^a-zA-Z0-9._-]/g, '_');
-    const urlToDownload = playlistUrl || (ytId ? (ytId.startsWith('http') ? ytId : `https://www.youtube.com/watch?v=${ytId}`) : null) || mediaUrl || genericUrl;
-    
-    let formatArg = itag;
-    let needsMerge = itag && itag.includes('+');
-
-    if (!formatArg) {
-       formatArg = 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best';
-    } else if (itag === 'bestaudio' || safeName.endsWith('.mp3') || safeName.endsWith('.m4a')) {
-       formatArg = 'bestaudio[ext=m4a]/bestaudio';
-    }
-
-    const job = await addDownloadJob({
-       url: urlToDownload,
-       filename: safeName,
-       formatArg,
-       igCookies,
-       needsMerge
-    });
-
-    res.json({ status: 'queued', jobId: job.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ===================== LEGACY DOWNLOAD / PROXY ENDPOINT =====================
 app.get('/api/media/download', async (req, res) => {
@@ -321,7 +272,7 @@ app.get('/api/media/download', async (req, res) => {
         const ytProcess = spawn(ytdlpPath, args, { windowsHide: true });
         
         // Clean up temp cookie file when process finishes
-        const cleanupTempFile = () => { if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (e) {} };
+        const cleanupTempFile = () => { if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (_e) {} };
         
         if (!needsMerge) {
           ytProcess.stdout.pipe(res);
@@ -342,14 +293,14 @@ app.get('/api/media/download', async (req, res) => {
               res.setHeader('Content-Length', stat.size);
               const readStream = fs.createReadStream(tempFile);
               readStream.pipe(res);
-              readStream.on('close', () => { try { fs.unlinkSync(tempFile); } catch (e) {} });
+              readStream.on('close', () => { try { fs.unlinkSync(tempFile); } catch (_e) {} });
               readStream.on('error', () => {
                 if (!res.headersSent) res.status(500).end();
-                try { fs.unlinkSync(tempFile); } catch (e) {}
+                try { fs.unlinkSync(tempFile); } catch (_e) {}
               });
             } else {
               if (!res.headersSent) res.status(500).json({ error: `yt-dlp merge failed (code ${code}). Ensure ffmpeg is installed.` });
-              try { if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+              try { if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
             }
           } else {
             if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exited with code ${code}` });
@@ -360,7 +311,7 @@ app.get('/api/media/download', async (req, res) => {
           ytProcess.kill();
           // Clean up temp file if client disconnects during merge
           if (tempFile) {
-            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
           }
         });
         return;
@@ -397,7 +348,7 @@ app.get('/api/media/download', async (req, res) => {
       proc.stderr.on('data', (d) => console.log('yt-dlp:', d.toString().trim()));
       proc.on('error', (err) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
       proc.on('close', (code) => {
-        if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (e) {}
+        if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (_e) {}
         if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exit ${code}` });
       });
       req.on('close', () => proc.kill());

@@ -1,3 +1,4 @@
+/* global Buffer */
 const { withTimeout, ytdlpGetInfoAsync } = require('./youtube');
 
 // GUARD: btch-downloader may not be available in all environments
@@ -120,10 +121,69 @@ const extractInstagram = async (url, igCookies = null) => {
       console.error('[Instagram] yt-dlp failed:', err.message);
     }
 
-    // 2. FALLBACK: btch-downloader igdl
+    // 2. RAPIDAPI FALLBACK (if configured)
+    if (process.env.RAPIDAPI_KEY) {
+      try {
+        console.log('[Instagram] FALLBACK: RapidAPI...');
+        // Standard endpoint for 'Instagram Downloader' on RapidAPI
+        // Host: instagram-downloader-download-instagram-videos-stories.p.rapidapi.com
+        const rapidApiUrl = `https://instagram-downloader-download-instagram-videos-stories.p.rapidapi.com/index?url=${encodeURIComponent(url)}`;
+        
+        const response = await fetch(rapidApiUrl, {
+          method: 'GET',
+          headers: {
+            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
+            'X-RapidAPI-Host': 'instagram-downloader-download-instagram-videos-stories.p.rapidapi.com'
+          }
+        });
+        
+        const data = await response.json();
+        
+        if (data && data.media && Array.isArray(data.media)) {
+          let vCount = 0;
+          let pCount = 0;
+          
+          data.media.forEach((mUrl) => {
+            if (typeof mUrl !== 'string') return;
+            const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
+            
+            if (isImage) {
+              pCount++;
+              options.push({
+                quality: `High Res Photo ${pCount}`,
+                size: 'Auto', format: 'JPG', url: mUrl,
+                imageUrl: mUrl,
+                isImage: true, useProxy: true,
+              });
+            } else {
+              vCount++;
+              options.push({
+                quality: `HD Video ${vCount}`,
+                size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+              });
+              options.push({
+                quality: `Audio Only ${vCount}`,
+                size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+              });
+            }
+          });
+          
+          if (options.length > 0) {
+            return {
+              success: true,
+              data: { type: options.every(o => o.isImage) ? 'image' : 'mixed', title: 'Instagram Post/Reel', thumbnail: data.thumbnail || '', options },
+            };
+          }
+        }
+      } catch (err) {
+        console.error('[Instagram] RapidAPI failed:', err.message);
+      }
+    }
+
+    // 3. FALLBACK: btch-downloader igdl (Dead due to DNS, but keeping as last resort)
     if (btch && btch.igdl) try {
       console.log('[Instagram] FALLBACK: btch igdl...');
-      const igRes = await withTimeout(btch.igdl(url), 8000, 'Instagram IGDL');
+      const igRes = await withTimeout(btch.igdl(url), 3000, 'Instagram IGDL');
 
       // FIX Bug 2 & 11: Filter out empty objects before processing.
       // btch igdl often returns [{}, {}, {}, ...] which wastes CPU cycles.
@@ -149,7 +209,7 @@ const extractInstagram = async (url, igCookies = null) => {
                      const parsed = JSON.parse(decoded);
                      if (parsed.url) decodedUrl = parsed.url;
                   }
-                } catch (e) {}
+                } catch (_e) {}
               }
               
               const isImage = decodedUrl.match(/\.(jpg|jpeg|png|webp)/i);
@@ -187,7 +247,7 @@ const extractInstagram = async (url, igCookies = null) => {
     if (options.length === 0 && btch && btch.aio) {
       try {
         console.log('[Instagram] FALLBACK: btch AIO...');
-        const aioRes = await withTimeout(btch.aio(url), 10000, 'Instagram AIO');
+        const aioRes = await withTimeout(btch.aio(url), 3000, 'Instagram AIO');
         if (aioRes && aioRes.data) {
           let vCount = 0;
           let pCount = 0;
@@ -206,7 +266,7 @@ const extractInstagram = async (url, igCookies = null) => {
                    const parsed = JSON.parse(decoded);
                    if (parsed.url) decodedUrl = parsed.url;
                 }
-              } catch (e) {}
+              } catch (_e) {}
             }
             
             const isImage = decodedUrl.match(/\.(jpg|jpeg|png|webp)/i);
@@ -260,7 +320,7 @@ const extractInstagram = async (url, igCookies = null) => {
       };
     }
 
-    throw new Error('All Instagram extractors failed or no valid options were found for this URL type.');
+    throw new Error('Could not extract media. If this is a private account or post, you MUST enter your Instagram Cookies in the App Settings to download it.');
 
   } catch (error) {
     console.error('[Instagram Extractor] Error:', error.message);

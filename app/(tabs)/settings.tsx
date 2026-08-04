@@ -33,7 +33,7 @@ export default function SettingsScreen() {
         if (data.nationality) setNationality(data.nationality);
         if (data.profileAvatar) setProfileAvatar(data.profileAvatar);
         if (data.igCookies) setIgCookies(data.igCookies);
-      } catch (e) {
+      } catch {
         // Silent fail — defaults remain
       }
     };
@@ -57,7 +57,7 @@ export default function SettingsScreen() {
       }
     }
     setIsEditingProfile(!isEditingProfile);
-  }, [isEditingProfile, userName, userPhone, dob, nationality]);
+  }, [isEditingProfile, userName, userPhone, dob, nationality, igCookies]);
 
   const handleChangePhoto = useCallback(async () => {
     let result = await ImagePicker.launchImageLibraryAsync({
@@ -72,7 +72,7 @@ export default function SettingsScreen() {
       setProfileAvatar(uri);
       try {
         await AsyncStorage.setItem('profileAvatar', uri);
-      } catch (e) {
+      } catch {
         // Silent fail
       }
     }

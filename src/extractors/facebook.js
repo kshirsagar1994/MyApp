@@ -123,7 +123,7 @@ const extractFacebook = async (url, igCookies = null) => {
     if (btch && btch.fbdown) {
       try {
         console.log('[Facebook] FALLBACK 1: btch fbdown...');
-        const fbRes = await withTimeout(btch.fbdown(url), 10000, 'Facebook fbdown');
+        const fbRes = await withTimeout(btch.fbdown(url), 3000, 'Facebook fbdown');
 
         if (fbRes && fbRes.status) {
           // fbdown returns { status: true, Normal_video: url, HD: url }
@@ -167,7 +167,7 @@ const extractFacebook = async (url, igCookies = null) => {
         }
 
         if (snapsave) {
-          const fbRes = await withTimeout(snapsave(url), 15000, 'Facebook snapsave');
+          const fbRes = await withTimeout(snapsave(url), 3000, 'Facebook snapsave');
           if (fbRes && fbRes.success && fbRes.data && fbRes.data.media) {
             fbRes.data.media.forEach(m => {
               if (m.url && typeof m.url === 'string' && m.url.startsWith('http')) {
@@ -199,7 +199,7 @@ const extractFacebook = async (url, igCookies = null) => {
     if (options.length === 0 && btch && btch.aio) {
       try {
         console.log('[Facebook] FALLBACK 3: btch AIO...');
-        const fbRes = await withTimeout(btch.aio(url), 15000, 'Facebook AIO');
+        const fbRes = await withTimeout(btch.aio(url), 3000, 'Facebook AIO');
 
         if (fbRes && fbRes.data) {
           const items = Array.isArray(fbRes.data) ? fbRes.data : [fbRes.data];

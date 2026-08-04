@@ -1,6 +1,7 @@
 // GUARD: Each extractor is wrapped in try/catch so a single broken module
 // doesn't crash the entire server (e.g., if btch-downloader has a dep issue).
 let extractYouTube, extractInstagram, extractFacebook, extractSnapchat, extractLinkedIn;
+let extractTikTok, extractTwitter, extractPinterest, extractThreads;
 
 try { ({ extractYouTube } = require('../extractors/youtube')); }
 catch (e) { console.error('[Controller] Failed to load YouTube extractor:', e.message); }
