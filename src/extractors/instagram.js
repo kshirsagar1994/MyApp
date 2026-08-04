@@ -127,25 +127,29 @@ const extractInstagram = async (url, igCookies = null) => {
         console.log('[Instagram] FALLBACK: RapidAPI...');
         // Standard endpoint for 'Instagram Downloader' on RapidAPI
         // Host: instagram-downloader-download-instagram-videos-stories.p.rapidapi.com
-        const rapidApiUrl = `https://instagram-downloader-download-instagram-videos-stories.p.rapidapi.com/index?url=${encodeURIComponent(url)}`;
+        const rapidApiUrl = `https://instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com/get-info-rapidapi?url=${encodeURIComponent(url)}`;
         
         const response = await fetch(rapidApiUrl, {
           method: 'GET',
           headers: {
             'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
-            'X-RapidAPI-Host': 'instagram-downloader-download-instagram-videos-stories.p.rapidapi.com'
+            'X-RapidAPI-Host': 'instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com'
           }
         });
         
         const data = await response.json();
         
-        if (data && data.media && Array.isArray(data.media)) {
+        if (data && (!data.error || (data.media && Array.isArray(data.media)))) {
           let vCount = 0;
           let pCount = 0;
           
-          data.media.forEach((mUrl) => {
+          const mediaUrls = [];
+          if (data.download_url) mediaUrls.push(data.download_url);
+          if (data.media && Array.isArray(data.media)) mediaUrls.push(...data.media);
+          
+          mediaUrls.forEach((mUrl) => {
             if (typeof mUrl !== 'string') return;
-            const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i);
+            const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i) || data.type === 'image';
             
             if (isImage) {
               pCount++;
@@ -171,7 +175,7 @@ const extractInstagram = async (url, igCookies = null) => {
           if (options.length > 0) {
             return {
               success: true,
-              data: { type: options.every(o => o.isImage) ? 'image' : 'mixed', title: 'Instagram Post/Reel', thumbnail: data.thumbnail || '', options },
+              data: { type: options.every(o => o.isImage) ? 'image' : 'mixed', title: data.caption || 'Instagram Post/Reel', thumbnail: data.thumb || data.thumbnail || '', options },
             };
           }
         }
