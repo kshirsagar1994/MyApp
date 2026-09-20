@@ -27,6 +27,7 @@ const extractTwitter = async (url, igCookies = null) => {
             format: f.ext.toUpperCase(),
             url: f.url,
             isVideo: true,
+            useProxy: true,
           });
           added++;
         }
@@ -35,14 +36,13 @@ const extractTwitter = async (url, igCookies = null) => {
       if (added > 0) {
         // Deduplicate
         const uniqueOptions = Array.from(new Map(options.map(item => [item.quality, item])).values());
-        // Sort by quality (highest resolution first is typical, but here we just return them)
         return { success: true, data: { type: 'video', title, thumbnail, options: uniqueOptions } };
       }
     }
 
     if (directUrl) {
       options.push({
-        quality: 'Video (HD)', size: 'Auto', format: 'MP4', url: directUrl, isVideo: true
+        quality: 'Video (HD)', size: 'Auto', format: 'MP4', url: directUrl, isVideo: true, useProxy: true
       });
       return { success: true, data: { type: 'video', title, thumbnail, options } };
     }
@@ -51,7 +51,7 @@ const extractTwitter = async (url, igCookies = null) => {
     if (info.thumbnails && info.thumbnails.length > 0) {
        const bestImage = info.thumbnails[info.thumbnails.length - 1];
        options.push({
-         quality: 'Image (HD)', size: 'Auto', format: 'JPG', url: bestImage.url, isImage: true
+         quality: 'Image (HD)', size: 'Auto', format: 'JPG', url: bestImage.url, isImage: true, useProxy: true
        });
        return { success: true, data: { type: 'image', title, thumbnail: bestImage.url, options } };
     }

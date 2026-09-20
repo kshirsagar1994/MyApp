@@ -57,12 +57,23 @@ const extractFacebook = async (url, igCookies = null) => {
       const directUrl = info.url;
 
       if (formats.length > 0) {
-        const videoFormats = formats
-          .filter(f => f.vcodec !== 'none' && f.vcodec !== 'images')
+        // 1. Combined video+audio formats
+        const combinedFormats = formats
+          .filter(f => f.vcodec && f.vcodec !== 'none' && f.vcodec !== 'images' && f.acodec && f.acodec !== 'none')
           .sort((a, b) => ((b.height || 0) * 1000 + (b.tbr || 0)) - ((a.height || 0) * 1000 + (a.tbr || 0)));
 
+        const videoFormats = formats
+          .filter(f => f.vcodec && f.vcodec !== 'none' && f.vcodec !== 'images')
+          .sort((a, b) => ((b.height || 0) * 1000 + (b.tbr || 0)) - ((a.height || 0) * 1000 + (a.tbr || 0)));
+
+        const audioFormats = formats
+          .filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
+          .sort((a, b) => (b.abr || 0) - (a.abr || 0));
+
         if (videoFormats.length > 0) {
-          const bestVideo = videoFormats[0];
+          const bestCombined = combinedFormats[0];
+          const bestVideo = bestCombined || videoFormats[0];
+          const bestAudio = audioFormats[0];
           const h = bestVideo.height || 0;
           const label = h >= 1080 ? 'HD Video' : 'SD Video';
           
@@ -70,27 +81,21 @@ const extractFacebook = async (url, igCookies = null) => {
             quality: label,
             size: bestVideo.filesize ? (bestVideo.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
             format: 'MP4',
-            url: bestVideo.url || '',
-            useProxy: !!bestVideo.url,
+            url: bestCombined ? bestCombined.url : '',
+            genericUrl: bestCombined ? undefined : url,
+            useProxy: true,
           });
 
           // Audio
-          const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none');
-          if (audioFormats.length > 0) {
-            const bestAudio = audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-            options.push({
-              quality: `Audio Only (${Math.round(bestAudio.abr || 128)}kbps)`,
-              size: 'Auto', format: 'M4A',
-              url: bestAudio.url || '', isAudio: true, useProxy: !!bestAudio.url,
-            });
-          } else {
-            // fallback: push the video url as audio if no separate audio format is found
-            options.push({
-              quality: 'Audio Only',
-              size: 'Auto', format: 'M4A',
-              url: bestVideo.url || '', isAudio: true, useProxy: !!bestVideo.url,
-            });
-          }
+          options.push({
+            quality: `Audio Only ${bestAudio?.abr ? `(${Math.round(bestAudio.abr)}kbps)` : ''}`.trim(),
+            size: bestAudio?.filesize ? (bestAudio.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+            format: 'M4A',
+            url: bestAudio ? bestAudio.url : (bestCombined ? bestCombined.url : ''),
+            genericUrl: bestAudio || bestCombined ? undefined : url,
+            isAudio: true,
+            useProxy: true,
+          });
 
           // Image (Thumbnail)
           if (thumbnail || directUrl) {

@@ -34,6 +34,7 @@ const extractTikTok = async (url, igCookies = null) => {
               format: f.ext.toUpperCase(),
               url: f.url,
               isVideo: true,
+              useProxy: true,
             });
             added++;
           }
@@ -48,7 +49,7 @@ const extractTikTok = async (url, igCookies = null) => {
 
       if (directUrl) {
         options.push({
-          quality: 'Video (HD)', size: 'Auto', format: 'MP4', url: directUrl, isVideo: true
+          quality: 'Video (HD)', size: 'Auto', format: 'MP4', url: directUrl, isVideo: true, useProxy: true
         });
         return { success: true, data: { type: 'video', title, thumbnail, options } };
       }
@@ -69,14 +70,14 @@ const extractTikTok = async (url, igCookies = null) => {
             fallbackRes.video.forEach((v, index) => {
                options.push({
                  quality: v === fallbackRes.video_nowm ? 'No Watermark' : `Video ${index + 1}`,
-                 size: 'Auto', format: 'MP4', url: v, isVideo: true
+                 size: 'Auto', format: 'MP4', url: v, isVideo: true, useProxy: true
                });
             });
           }
           if (fallbackRes.audio && fallbackRes.audio.length > 0) {
              fallbackRes.audio.forEach((a, index) => {
                options.push({
-                 quality: `Audio ${index + 1}`, size: 'Auto', format: 'MP3', url: a, isAudio: true
+                 quality: `Audio ${index + 1}`, size: 'Auto', format: 'MP3', url: a, isAudio: true, useProxy: true
                });
              });
           }

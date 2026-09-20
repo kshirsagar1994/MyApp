@@ -27,6 +27,7 @@ const extractPinterest = async (url, igCookies = null) => {
             format: f.ext.toUpperCase(),
             url: f.url,
             isVideo: true,
+            useProxy: true,
           });
           added++;
         }
@@ -42,7 +43,8 @@ const extractPinterest = async (url, igCookies = null) => {
       options.push({
         quality: 'Media', size: 'Auto', format: info.ext ? info.ext.toUpperCase() : 'MP4', url: directUrl, 
         isVideo: directUrl.includes('.mp4') || directUrl.includes('.webm'),
-        isImage: directUrl.includes('.jpg') || directUrl.includes('.png')
+        isImage: directUrl.includes('.jpg') || directUrl.includes('.png'),
+        useProxy: true,
       });
       return { success: true, data: { type: directUrl.includes('.mp4') ? 'video' : 'image', title, thumbnail, options } };
     }
@@ -51,7 +53,7 @@ const extractPinterest = async (url, igCookies = null) => {
     if (info.thumbnails && info.thumbnails.length > 0) {
        const bestImage = info.thumbnails[info.thumbnails.length - 1];
        options.push({
-         quality: 'Image (HD)', size: 'Auto', format: 'JPG', url: bestImage.url, isImage: true
+         quality: 'Image (HD)', size: 'Auto', format: 'JPG', url: bestImage.url, isImage: true, useProxy: true,
        });
        return { success: true, data: { type: 'image', title, thumbnail: bestImage.url, options } };
     }

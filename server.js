@@ -342,17 +342,42 @@ app.get('/api/media/download', async (req, res) => {
     // ─── Generic yt-dlp download ───
     if (genericUrl) {
       const ytdlpPath = await getYtdlpPath();
-      const isAudio = safeName.endsWith('.mp3');
+      const isAudio = safeName.endsWith('.mp3') || safeName.endsWith('.m4a');
       res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
 
-      // FIX: Use pre-merged format with audio guarantee
+      let formatArg;
+      let needsMerge = !isAudio && isFfmpegAvailable();
+
+      if (needsMerge) {
+        formatArg = 'bestvideo+bestaudio/best';
+      } else if (isAudio) {
+        formatArg = 'bestaudio[ext=m4a]/bestaudio';
+      } else {
+        formatArg = 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best';
+      }
+
+      console.log(`[Download] Generic yt-dlp: ${genericUrl} format=${formatArg} needsMerge=${needsMerge}`);
+
       const args = [
-        '-f', isAudio ? 'bestaudio[ext=m4a]/bestaudio' : 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best',
-        '-o', '-',
-        '--no-warnings', '--no-check-certificates',
+        '-f', formatArg,
+        '--no-warnings',
+        '--no-check-certificates',
         '--js-runtimes', 'node'
       ];
+
+      if (genericUrl.includes('youtube.com') || genericUrl.includes('youtu.be')) {
+        args.push('--extractor-args', 'youtube:player_client=android,ios,web');
+      }
+
+      let tempFile = null;
+      if (needsMerge) {
+        tempFile = path.join(os.tmpdir(), `temp_merge_${Date.now()}_${Math.floor(Math.random() * 1000)}.mp4`);
+        args.push('--merge-output-format', 'mp4', '-o', tempFile);
+      } else {
+        args.push('-o', '-');
+      }
+
       const cookiesPath = path.join(__dirname, 'cookies.txt');
       let tempIgCookieFile = null;
       if (igCookies) {
@@ -364,14 +389,46 @@ app.get('/api/media/download', async (req, res) => {
       args.push(genericUrl);
 
       const proc = spawn(ytdlpPath, args, { windowsHide: true });
-      proc.stdout.pipe(res);
-      proc.stderr.on('data', (d) => console.log('yt-dlp:', d.toString().trim()));
-      proc.on('error', (err) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
-      proc.on('close', (code) => {
+      const cleanupTempFile = () => {
         if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (_e) {}
-        if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exit ${code}` });
+      };
+
+      if (!needsMerge) {
+        proc.stdout.pipe(res);
+      }
+
+      proc.stderr.on('data', (d) => console.log('yt-dlp generic:', d.toString().trim()));
+      proc.on('error', (err) => {
+        cleanupTempFile();
+        if (!res.headersSent) res.status(500).json({ error: err.message });
       });
-      req.on('close', () => proc.kill());
+
+      proc.on('close', (code) => {
+        cleanupTempFile();
+        if (needsMerge) {
+          if (code === 0 && tempFile && fs.existsSync(tempFile)) {
+            const stat = fs.statSync(tempFile);
+            res.setHeader('Content-Length', stat.size);
+            const readStream = fs.createReadStream(tempFile);
+            readStream.pipe(res);
+            readStream.on('close', () => { try { fs.unlinkSync(tempFile); } catch (_e) {} });
+            readStream.on('error', () => {
+              if (!res.headersSent) res.status(500).end();
+              try { fs.unlinkSync(tempFile); } catch (_e) {}
+            });
+          } else {
+            if (!res.headersSent) res.status(500).json({ error: `yt-dlp merge failed (code ${code}).` });
+            try { if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
+          }
+        } else {
+          if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exit ${code}` });
+        }
+      });
+
+      req.on('close', () => {
+        proc.kill();
+        if (tempFile) try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
+      });
       return;
     }
 

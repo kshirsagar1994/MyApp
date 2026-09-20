@@ -35,25 +35,44 @@ const extractInstagram = async (url, igCookies = null) => {
                                (directUrl && directUrl.match(/\.(jpg|jpeg|png|webp)(\?|$)/i)) ||
                                (entry.vcodec === 'none' && entry.acodec === 'none');
 
-        const videoFormats = formats
-            .filter(f => f.vcodec !== 'none' && f.vcodec !== 'images' && f.ext !== 'mhtml')
+        // 1. Combined video+audio formats (progressive MP4)
+        const combinedVideoFormats = formats
+            .filter(f => f.vcodec && f.vcodec !== 'none' && f.vcodec !== 'images' && f.acodec && f.acodec !== 'none' && f.ext !== 'mhtml')
             .sort((a, b) => ((b.height || 0) * 1000 + (b.tbr || 0)) - ((a.height || 0) * 1000 + (a.tbr || 0)));
 
-        if (videoFormats.length > 0 && !isExplicitImage) {
-            const bestVideo = videoFormats[0];
+        // 2. Any video format (including DASH video-only)
+        const anyVideoFormats = formats
+            .filter(f => f.vcodec && f.vcodec !== 'none' && f.vcodec !== 'images' && f.ext !== 'mhtml')
+            .sort((a, b) => ((b.height || 0) * 1000 + (b.tbr || 0)) - ((a.height || 0) * 1000 + (a.tbr || 0)));
+
+        // 3. Audio formats
+        const audioFormats = formats
+            .filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
+            .sort((a, b) => (b.tbr || 0) - (a.tbr || 0));
+
+        if (anyVideoFormats.length > 0 && !isExplicitImage) {
+            const bestCombined = combinedVideoFormats[0];
+            const bestVideo = bestCombined || anyVideoFormats[0];
+            const bestAudio = audioFormats[0];
             vCount++;
+
+            // If a pre-merged stream exists, use its direct CDN url.
+            // If only DASH separate streams exist, use genericUrl so server.js merges video+audio with yt-dlp.
             options.push({
               quality: `HD Video ${entries.length > 1 ? vCount : ''}`.trim(),
               size: bestVideo.filesize ? (bestVideo.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
               format: 'MP4',
-              url: bestVideo.url,
+              url: bestCombined ? bestCombined.url : '',
+              genericUrl: bestCombined ? undefined : url,
               useProxy: true,
             });
+
             options.push({
               quality: `Audio Only ${entries.length > 1 ? vCount : ''}`.trim(),
-              size: 'Auto',
+              size: bestAudio?.filesize ? (bestAudio.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
               format: 'M4A',
-              url: bestVideo.url,
+              url: bestAudio ? bestAudio.url : (bestCombined ? bestCombined.url : ''),
+              genericUrl: bestAudio || bestCombined ? undefined : url,
               isAudio: true,
               useProxy: true,
             });
