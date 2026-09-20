@@ -4,12 +4,13 @@ const express = require('express');
 const cors = require('cors');
 const { Readable } = require('stream');
 const { spawn } = require('child_process');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 
 // ── Use the SINGLE canonical yt-dlp helpers from youtube.js extractor
 // This eliminates the duplicate runYtdlp/ytdlpGetInfoAsync that existed here before.
-const { createTempCookieFile } = require('./src/extractors/youtube');
+const { createTempCookieFile, ensureYtdlp } = require('./src/extractors/youtube');
 
 // ── Auth
 // Auth controller removed
@@ -26,20 +27,32 @@ const PRO_HEADERS = {
 
 // ===================== HELPERS =====================
 
-const getYtdlpPath = () => {
-  const isWindows = process.platform === 'win32';
-  return path.join(__dirname, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+const getYtdlpPath = async () => {
+  return await ensureYtdlp();
+};
+
+let _ffmpegChecked = null;
+const isFfmpegAvailable = () => {
+  if (_ffmpegChecked !== null) return _ffmpegChecked;
+  try {
+    const { execSync } = require('child_process');
+    execSync('ffmpeg -version', { stdio: 'ignore' });
+    _ffmpegChecked = true;
+  } catch {
+    _ffmpegChecked = false;
+  }
+  return _ffmpegChecked;
 };
 
 const IS_VERCEL = !!process.env.VERCEL;
 
 /** ASYNC playlist extraction */
-const ytdlpGetPlaylistAsync = (url, timeoutMs = 30000) => {
+const ytdlpGetPlaylistAsync = async (url, timeoutMs = 30000) => {
   if (IS_VERCEL) {
     return Promise.reject(new Error('Playlists are not supported on serverless deployment. Use single video links.'));
   }
+  const ytdlpPath = await getYtdlpPath();
   return new Promise((resolve, reject) => {
-    const ytdlpPath = getYtdlpPath();
     const args = ['--flat-playlist', '-J', '--no-warnings', '--no-check-certificates', '--js-runtimes', 'node'];
     const cookiesPath = path.join(__dirname, 'cookies.txt');
     if (fs.existsSync(cookiesPath)) {
@@ -215,16 +228,22 @@ app.get('/api/media/download', async (req, res) => {
     if (ytId || (mediaUrl && (mediaUrl.includes('googlevideo.com') || mediaUrl.includes('youtube.com')))) {
       const videoId = ytId;
       if (videoId) {
-        const ytdlpPath = getYtdlpPath();
+        const ytdlpPath = await getYtdlpPath();
         const ytUrl = videoId.startsWith('http') ? videoId : `https://www.youtube.com/watch?v=${videoId}`;
 
         let formatArg;
-        const needsMerge = itag && itag.includes('+');
+        let needsMerge = itag && itag.includes('+');
+
+        // On environments without ffmpeg (e.g. Vercel serverless), merging video+audio fails
+        if (needsMerge && !isFfmpegAvailable()) {
+          console.log('[Download] ffmpeg not available, falling back to best pre-merged stream');
+          needsMerge = false;
+        }
 
         if (needsMerge) {
           // User chose a specific video+audio combo (e.g. 137+140) — needs ffmpeg merge
           formatArg = itag;
-        } else if (itag && itag !== 'bestvideo+bestaudio/best' && itag !== 'bestaudio' && itag !== 'best') {
+        } else if (itag && itag !== 'bestvideo+bestaudio/best' && itag !== 'bestaudio' && itag !== 'best' && !itag.includes('+')) {
           // Specific single-stream format ID
           formatArg = itag;
         } else if (itag === 'bestaudio' || safeName.endsWith('.mp3') || safeName.endsWith('.m4a')) {
@@ -252,8 +271,8 @@ app.get('/api/media/download', async (req, res) => {
         
         let tempFile = null;
         if (needsMerge) {
-          // FIX Bug 4: Merge to temp file, then stream — yt-dlp can't merge to stdout
-          tempFile = path.join(__dirname, `temp_merge_${Date.now()}_${Math.floor(Math.random() * 1000)}.mp4`);
+          // FIX Bug 4: Merge to temp file in writable os.tmpdir(), then stream — yt-dlp can't merge to stdout
+          tempFile = path.join(os.tmpdir(), `temp_merge_${Date.now()}_${Math.floor(Math.random() * 1000)}.mp4`);
           args.push('--merge-output-format', 'mp4', '-o', tempFile);
         } else {
           // Single pre-merged stream → pipe directly to response (fast, no temp file)
@@ -321,7 +340,7 @@ app.get('/api/media/download', async (req, res) => {
 
     // ─── Generic yt-dlp download ───
     if (genericUrl) {
-      const ytdlpPath = getYtdlpPath();
+      const ytdlpPath = await getYtdlpPath();
       const isAudio = safeName.endsWith('.mp3');
       res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
@@ -386,8 +405,8 @@ app.get('/api/media/download', async (req, res) => {
 });
 
 // ===================== PLAYLIST DOWNLOAD =====================
-function handlePlaylistDownload(playlistUrl, format, safeName, req, res) {
-  const ytdlpPath = getYtdlpPath();
+async function handlePlaylistDownload(playlistUrl, format, safeName, req, res) {
+  const ytdlpPath = await getYtdlpPath();
   const isAudio = format === 'audio';
 
   res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');

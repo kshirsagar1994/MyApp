@@ -3,20 +3,82 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-/**
- * Async yt-dlp JSON extraction — non-blocking.
- * NOTE: On Vercel serverless, yt-dlp binary cannot run. We detect this
- * and immediately reject so callers fall through to btch-downloader fallback.
- */
-const IS_VERCEL = !!process.env.VERCEL;
+const os = require('os');
 
-const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
-  if (IS_VERCEL) {
-    return Promise.reject(new Error('yt-dlp unavailable in serverless environment'));
+/**
+ * Async yt-dlp binary locator & installer.
+ * On Windows, uses local yt-dlp.exe.
+ * On Linux (e.g. Vercel / Docker), uses /tmp/yt-dlp with 0755 execute permissions.
+ */
+const ensureYtdlp = async () => {
+  const isWindows = process.platform === 'win32';
+  if (isWindows) {
+    return path.resolve(__dirname, '..', '..', 'yt-dlp.exe');
   }
+
+  const tmpPath = path.join(os.tmpdir(), 'yt-dlp');
+
+  // 1. If /tmp/yt-dlp already exists
+  if (fs.existsSync(tmpPath)) {
+    try { fs.chmodSync(tmpPath, 0o755); } catch {}
+    return tmpPath;
+  }
+
+  // 2. Check bundled binary in repo root
+  const rootBinary = path.resolve(__dirname, '..', '..', 'yt-dlp');
+  if (fs.existsSync(rootBinary)) {
+    try {
+      // In Vercel serverless, /var/task is read-only and noexec.
+      // Copying to /tmp gives full execution permissions.
+      fs.copyFileSync(rootBinary, tmpPath);
+      fs.chmodSync(tmpPath, 0o755);
+      console.log('[yt-dlp] Copied bundled binary to', tmpPath);
+      return tmpPath;
+    } catch (err) {
+      console.warn('[yt-dlp] Copy bundled binary failed:', err.message);
+      try {
+        fs.chmodSync(rootBinary, 0o755);
+        return rootBinary;
+      } catch {}
+    }
+  }
+
+  // 3. Download standalone Linux yt-dlp binary to /tmp on demand
+  console.log('[yt-dlp] Downloading Linux binary to', tmpPath, 'on Vercel...');
+  const https = require('https');
+  const downloadUrl = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+
+  await new Promise((resolve, reject) => {
+    const fetchBinary = (url, depth = 0) => {
+      if (depth > 6) return reject(new Error('Too many redirects downloading yt-dlp'));
+      https.get(url, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return fetchBinary(res.headers.location, depth + 1);
+        }
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Failed to download yt-dlp: HTTP ${res.statusCode}`));
+        }
+        const file = fs.createWriteStream(tmpPath);
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close(() => {
+            try { fs.chmodSync(tmpPath, 0o755); } catch {}
+            console.log('[yt-dlp] Downloaded and ready at', tmpPath);
+            resolve();
+          });
+        });
+        file.on('error', reject);
+      }).on('error', reject);
+    };
+    fetchBinary(downloadUrl);
+  });
+
+  return tmpPath;
+};
+
+const runYtdlp = async (url, extraArgs = [], timeoutMs = 25000) => {
+  const ytdlpPath = await ensureYtdlp();
   return new Promise((resolve, reject) => {
-    const isWindows = process.platform === 'win32';
-    const ytdlpPath = path.resolve(__dirname, '..', '..', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     const args = ['-j', '--no-warnings', '--no-check-certificates', '--js-runtimes', 'node', ...extraArgs, url];
     const proc = spawn(ytdlpPath, args, { windowsHide: true });
 
@@ -63,7 +125,7 @@ const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
  * @returns {string} Path to the temp cookie file (caller must clean up)
  */
 const createTempCookieFile = (cookieString, domain = '.instagram.com') => {
-  const tempPath = path.resolve(__dirname, '..', '..', `_cookies_${Date.now()}.txt`);
+  const tempPath = path.join(os.tmpdir(), `_cookies_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.txt`);
 
   if (cookieString.includes('# Netscape HTTP Cookie File')) {
     fs.writeFileSync(tempPath, cookieString, 'utf-8');
@@ -277,9 +339,75 @@ const extractYouTube = async (url, igCookies = null) => {
     console.error('[YouTube Extractor] yt-dlp failed:', ytdlpError.message);
   }
 
-  // 2. FALLBACK: btch.youtube() — dedicated YouTube method (works on Vercel serverless)
-  //    btch.aio() does NOT work for YouTube (returns "Invalid search API response").
-  //    btch.youtube() returns { status, title, thumbnail, author, mp3, mp4 }.
+  // 2. FALLBACK: Invidious API (zero-binary pure HTTP fallback)
+  try {
+    const idMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/))([\w-]{11})/);
+    const videoId = idMatch ? idMatch[1] : null;
+    if (videoId) {
+      console.log('[YouTube Extractor] FALLBACK: Invidious API for:', videoId);
+      const invRes = await withTimeout(
+        fetch(`https://invidious.f5.si/api/v1/videos/${videoId}`, { headers: { 'User-Agent': 'Mozilla/5.0' } }),
+        10000,
+        'Invidious'
+      );
+      if (invRes.ok) {
+        const data = await invRes.json();
+        const title = data.title || 'YouTube Video';
+        const thumbnail = data.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+        const options = [];
+
+        const streams = data.formatStreams || [];
+        streams.forEach((st) => {
+          if (st.url) {
+            options.push({
+              quality: `Video (${st.qualityLabel || st.resolution || 'HD'})`,
+              size: st.size || 'Auto',
+              format: 'MP4',
+              url: st.url,
+              useProxy: true,
+            });
+          }
+        });
+
+        const adaptive = data.adaptiveFormats || [];
+        const videoAdap = adaptive.filter((f) => f.type?.startsWith('video/mp4') && f.qualityLabel);
+        videoAdap.slice(0, 3).forEach((f) => {
+          if (f.url && !options.some((o) => o.quality.includes(f.qualityLabel))) {
+            options.push({
+              quality: `Video HD (${f.qualityLabel})`,
+              size: f.contentLength ? (f.contentLength / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+              format: 'MP4',
+              url: f.url,
+              useProxy: true,
+            });
+          }
+        });
+
+        const audioAdap = adaptive.filter((f) => f.type?.startsWith('audio/'));
+        if (audioAdap.length > 0) {
+          const bestAudio = audioAdap.find((f) => f.container === 'm4a') || audioAdap[0];
+          if (bestAudio.url) {
+            options.push({
+              quality: 'Audio (M4A/MP3)',
+              size: bestAudio.contentLength ? (bestAudio.contentLength / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+              format: 'M4A',
+              url: bestAudio.url,
+              isAudio: true,
+              useProxy: true,
+            });
+          }
+        }
+
+        if (options.length > 0) {
+          return { success: true, data: { type: 'video', title, thumbnail, options } };
+        }
+      }
+    }
+  } catch (invErr) {
+    console.warn('[YouTube Extractor] Invidious fallback failed:', invErr.message);
+  }
+
+  // 3. FALLBACK: btch.youtube() — dedicated YouTube method
   try {
     let btch;
     try { btch = require('btch-downloader'); } catch { btch = null; }
@@ -327,7 +455,7 @@ const extractYouTube = async (url, igCookies = null) => {
     console.error('[YouTube Extractor] btch.youtube() failed:', btchError.message);
   }
 
-  // 3. LAST RESORT: btch.aio() (generic, rarely works for YouTube but try anyway)
+  // 4. LAST RESORT: btch.aio() (generic, rarely works for YouTube but try anyway)
   try {
     let btch;
     try { btch = require('btch-downloader'); } catch { btch = null; }
@@ -368,5 +496,5 @@ const extractYouTube = async (url, igCookies = null) => {
   return { success: false, error: 'YouTube extraction failed. All methods exhausted.' };
 };
 
-module.exports = { extractYouTube, withTimeout, ytdlpGetInfoAsync, createTempCookieFile };
+module.exports = { extractYouTube, withTimeout, ytdlpGetInfoAsync, createTempCookieFile, ensureYtdlp };
 
