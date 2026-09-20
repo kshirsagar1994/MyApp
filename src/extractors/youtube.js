@@ -364,6 +364,8 @@ const extractYouTube = async (url, igCookies = null) => {
               size: st.size || 'Auto',
               format: 'MP4',
               url: st.url,
+              ytId: videoId,
+              itag: st.itag ? String(st.itag) : undefined,
               useProxy: true,
             });
           }
@@ -378,6 +380,8 @@ const extractYouTube = async (url, igCookies = null) => {
               size: f.contentLength ? (f.contentLength / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
               format: 'MP4',
               url: f.url,
+              ytId: videoId,
+              itag: f.itag ? String(f.itag) : undefined,
               useProxy: true,
             });
           }
@@ -392,6 +396,8 @@ const extractYouTube = async (url, igCookies = null) => {
               size: bestAudio.contentLength ? (bestAudio.contentLength / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
               format: 'M4A',
               url: bestAudio.url,
+              ytId: videoId,
+              itag: bestAudio.itag ? String(bestAudio.itag) : undefined,
               isAudio: true,
               useProxy: true,
             });
