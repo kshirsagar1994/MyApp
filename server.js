@@ -40,12 +40,10 @@ const ytdlpGetPlaylistAsync = (url, timeoutMs = 30000) => {
   }
   return new Promise((resolve, reject) => {
     const ytdlpPath = getYtdlpPath();
-    const args = ['--flat-playlist', '-J', '--no-warnings', '--no-check-certificates'];
+    const args = ['--flat-playlist', '-J', '--no-warnings', '--no-check-certificates', '--js-runtimes', 'node'];
     const cookiesPath = path.join(__dirname, 'cookies.txt');
     if (fs.existsSync(cookiesPath)) {
       args.push('--cookies', cookiesPath);
-    } else {
-      args.push('--cookies-from-browser', 'chrome');
     }
     args.push(url);
     const proc = spawn(ytdlpPath, args, { windowsHide: true });
@@ -248,7 +246,8 @@ app.get('/api/media/download', async (req, res) => {
           '-f', formatArg,
           '--no-playlist',
           '--no-warnings',
-          '--no-check-certificates'
+          '--no-check-certificates',
+          '--js-runtimes', 'node'
         ];
         
         let tempFile = null;
@@ -268,8 +267,6 @@ app.get('/api/media/download', async (req, res) => {
            args.push('--cookies', tempIgCookieFile);
         } else if (fs.existsSync(cookiesPath)) {
            args.push('--cookies', cookiesPath);
-        } else {
-           args.push('--cookies-from-browser', 'chrome');
         }
         args.push(ytUrl);
 
@@ -333,7 +330,8 @@ app.get('/api/media/download', async (req, res) => {
       const args = [
         '-f', isAudio ? 'bestaudio[ext=m4a]/bestaudio' : 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best',
         '-o', '-',
-        '--no-warnings', '--no-check-certificates'
+        '--no-warnings', '--no-check-certificates',
+        '--js-runtimes', 'node'
       ];
       const cookiesPath = path.join(__dirname, 'cookies.txt');
       let tempIgCookieFile = null;
@@ -342,8 +340,6 @@ app.get('/api/media/download', async (req, res) => {
          args.push('--cookies', tempIgCookieFile);
       } else if (fs.existsSync(cookiesPath)) {
          args.push('--cookies', cookiesPath);
-      } else {
-         args.push('--cookies-from-browser', 'chrome');
       }
       args.push(genericUrl);
 
@@ -400,13 +396,12 @@ function handlePlaylistDownload(playlistUrl, format, safeName, req, res) {
   console.log(`[Playlist Download] ${playlistUrl} format=${format}`);
 
   let args;
-  if (isAudio) {
-    // Audio: extract audio only, convert to mp3. No --merge-output-format needed.
+  if (format === 'audio') {
     args = [
-      '-x', '--audio-format', 'mp3',
       '-f', 'bestaudio',
       '-o', '-',
       '--no-warnings', '--no-check-certificates',
+      '--js-runtimes', 'node',
       '--yes-playlist'
     ];
   } else {
@@ -415,6 +410,7 @@ function handlePlaylistDownload(playlistUrl, format, safeName, req, res) {
       '-f', 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best',
       '-o', '-',
       '--no-warnings', '--no-check-certificates',
+      '--js-runtimes', 'node',
       '--yes-playlist'
     ];
   }
@@ -422,8 +418,6 @@ function handlePlaylistDownload(playlistUrl, format, safeName, req, res) {
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   if (fs.existsSync(cookiesPath)) {
      args.push('--cookies', cookiesPath);
-  } else {
-     args.push('--cookies-from-browser', 'chrome');
   }
   args.push(playlistUrl);
 

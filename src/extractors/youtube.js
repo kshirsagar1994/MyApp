@@ -17,7 +17,7 @@ const runYtdlp = (url, extraArgs = [], timeoutMs = 20000) => {
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
     const ytdlpPath = path.resolve(__dirname, '..', '..', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
-    const args = ['-j', '--no-warnings', '--no-check-certificates', ...extraArgs, url];
+    const args = ['-j', '--no-warnings', '--no-check-certificates', '--js-runtimes', 'node', ...extraArgs, url];
     const proc = spawn(ytdlpPath, args, { windowsHide: true });
 
     let stdout = '';

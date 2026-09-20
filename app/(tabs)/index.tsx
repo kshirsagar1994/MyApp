@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { documentDirectory, createDownloadResumable } from 'expo-file-system/legacy';
+import { documentDirectory, createDownloadResumable, readAsStringAsync, deleteAsync } from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import Animated, { FadeInDown } from 'react-native-reanimated';
@@ -290,7 +290,24 @@ export default function HomeScreen() {
           console.log('Storage Error', err);
         }
       } else {
-        Alert.alert('Download Failed ❌', 'Server returned an unexpected response.');
+        let serverErrorMsg = '';
+        try {
+          if (downloadResult && downloadResult.uri) {
+            const errorBody = await readAsStringAsync(downloadResult.uri);
+            try {
+              const parsed = JSON.parse(errorBody);
+              serverErrorMsg = parsed.error || parsed.message || errorBody;
+            } catch {
+              serverErrorMsg = errorBody.slice(0, 120);
+            }
+            await deleteAsync(downloadResult.uri, { idempotent: true });
+          }
+        } catch {}
+
+        Alert.alert(
+          'Download Failed ❌',
+          serverErrorMsg ? `Server error: ${serverErrorMsg}` : `Server returned status: ${downloadResult?.status || 'Unknown'}`
+        );
       }
     } catch (e: any) {
       console.error(e);
