@@ -240,22 +240,18 @@ app.get('/api/media/download', async (req, res) => {
           needsMerge = false;
         }
 
+        const isAudio = safeName.endsWith('.mp3') || safeName.endsWith('.m4a');
+
         if (needsMerge) {
-          // User chose a specific video+audio combo (e.g. 137+140) — needs ffmpeg merge
-          formatArg = itag;
+          formatArg = `${itag}/bestvideo+bestaudio/best`;
         } else if (itag && itag !== 'bestvideo+bestaudio/best' && itag !== 'bestaudio' && itag !== 'best' && !itag.includes('+')) {
-          // Specific single-stream format ID
-          formatArg = itag;
-        } else if (itag === 'bestaudio' || safeName.endsWith('.mp3') || safeName.endsWith('.m4a')) {
-          formatArg = 'bestaudio[ext=m4a]/bestaudio';
+          formatArg = isAudio ? `${itag}/bestaudio[ext=m4a]/bestaudio/best` : `${itag}/best[ext=mp4][acodec!=none]/best[acodec!=none]/best`;
+        } else if (itag === 'bestaudio' || isAudio) {
+          formatArg = 'bestaudio[ext=m4a]/bestaudio/best';
         } else {
-          // FIX Bug 3: Force a pre-merged stream that has BOTH video+audio.
-          // 'best' on modern YouTube can pick video-only DASH streams → black screen.
-          // We require acodec!=none to guarantee audio is present.
           formatArg = 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best';
         }
 
-        const isAudio = safeName.endsWith('.mp3') || safeName.endsWith('.m4a');
         res.setHeader('Content-Type', isAudio ? 'audio/mp4' : 'video/mp4');
         res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
 
@@ -266,8 +262,7 @@ app.get('/api/media/download', async (req, res) => {
           '--no-playlist',
           '--no-warnings',
           '--no-check-certificates',
-          '--js-runtimes', 'node',
-          '--extractor-args', 'youtube:player_client=android,ios,web'
+          '--js-runtimes', 'node'
         ];
         
         let tempFile = null;

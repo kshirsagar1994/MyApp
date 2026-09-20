@@ -68,13 +68,11 @@ const ensureYtdlp = async () => {
 const runYtdlp = async (url, extraArgs = [], timeoutMs = 25000) => {
   const ytdlpPath = await ensureYtdlp();
   return new Promise((resolve, reject) => {
-    const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
     const args = [
       '-j',
       '--no-warnings',
       '--no-check-certificates',
       '--js-runtimes', 'node',
-      ...(isYouTube ? ['--extractor-args', 'youtube:player_client=android,ios,web'] : []),
       ...extraArgs,
       url
     ];
