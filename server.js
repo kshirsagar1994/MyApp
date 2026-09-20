@@ -117,24 +117,6 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', message: 'Backend is healthy', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/debug-ytdlp', async (_req, res) => {
-  try {
-    const ytdlpPath = await getYtdlpPath();
-    const exists = fs.existsSync(ytdlpPath);
-    let version = null;
-    let err = null;
-    try {
-      const { execSync } = require('child_process');
-      version = execSync(`"${ytdlpPath}" --version`, { timeout: 10000 }).toString().trim();
-    } catch (e) {
-      err = e.message + (e.stderr ? ` | ${e.stderr.toString()}` : '');
-    }
-    res.json({ ytdlpPath, exists, version, err });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
-});
-
 // ===================== AUTH ENDPOINTS REMOVED =====================
 
 
