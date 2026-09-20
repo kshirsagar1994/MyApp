@@ -262,7 +262,7 @@ app.get('/api/media/download', async (req, res) => {
           '--no-playlist',
           '--no-warnings',
           '--no-check-certificates',
-          '--js-runtimes', `node:${process.execPath}`,
+          '--js-runtimes', 'node',
           '-o', tempFile
         ];
 
@@ -286,7 +286,12 @@ app.get('/api/media/download', async (req, res) => {
           if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (_e) {}
         };
         
-        ytProcess.stderr.on('data', (data) => console.log('yt-dlp stderr:', data.toString().trim()));
+        let ytStderr = '';
+        ytProcess.stderr.on('data', (data) => {
+          const s = data.toString();
+          ytStderr += s;
+          console.log('yt-dlp stderr:', s.trim());
+        });
         
         ytProcess.on('error', (err) => {
           cleanupTempFile();
@@ -309,8 +314,8 @@ app.get('/api/media/download', async (req, res) => {
               try { fs.unlinkSync(tempFile); } catch (_e) {}
             });
           } else {
-            console.error(`yt-dlp exited with code ${code}`);
-            if (!res.headersSent) res.status(500).json({ error: `yt-dlp failed (code ${code})` });
+            console.error(`yt-dlp exited with code ${code}: ${ytStderr}`);
+            if (!res.headersSent) res.status(500).json({ error: `yt-dlp failed (code ${code}): ${ytStderr.trim().split('\n').pop() || 'unknown'}` });
             try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
           }
         });
