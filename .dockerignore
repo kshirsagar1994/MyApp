@@ -9,6 +9,8 @@ dist
 hooks
 scripts
 yt-dlp.exe
+yt-dlp.exe.*
+*.old
 .claude
 .vscode
 CLAUDE.md
@@ -19,3 +21,11 @@ cspell.json
 eslint.config.js
 expo-env.d.ts
 tsconfig.json
+.env
+.env*
+*.env
+cookies.txt
+*.cookies
+*.key
+*.pem
+*.keystore

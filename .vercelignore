@@ -1,3 +1,13 @@
+# Environment & Secrets (managed via Vercel Project Settings)
+.env
+.env*
+*.env
+cookies.txt
+*.cookies
+*.key
+*.pem
+*.keystore
+
 # Mobile app (not needed for backend deployment)
 app/
 android/
@@ -11,6 +21,8 @@ web-build/
 # Large binaries (yt-dlp is downloaded during build via vercel-build script)
 yt-dlp.exe
 yt-dlp
+yt-dlp.exe.*
+*.old
 
 # Dev dependencies & build artifacts
 node_modules/
