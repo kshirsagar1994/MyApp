@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { getServerBaseUrl, setActiveServerUrl, VERCEL_URL } from './index';
 
 export default function SettingsScreen() {
   const colorScheme = useColorScheme();
@@ -18,11 +19,15 @@ export default function SettingsScreen() {
   const [profileAvatar, setProfileAvatar] = useState('https://ui-avatars.com/api/?name=User&background=random');
   const [igCookies, setIgCookies] = useState('');
 
+  const [customBackendUrl, setCustomBackendUrl] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'connected' | 'error'>('idle');
+  const [connectionMsg, setConnectionMsg] = useState('');
+
   useEffect(() => {
-    // ── PERFORMANCE: Single multiGet instead of 5 individual getItem calls
+    // ── PERFORMANCE: Single multiGet instead of individual getItem calls
     const loadProfile = async () => {
       try {
-        const keys = ['userName', 'userPhone', 'dob', 'nationality', 'profileAvatar', 'igCookies'];
+        const keys = ['userName', 'userPhone', 'dob', 'nationality', 'profileAvatar', 'igCookies', 'customBackendUrl'];
         const results = await AsyncStorage.multiGet(keys);
         const data: Record<string, string | null> = {};
         results.forEach(([key, value]) => { data[key] = value; });
@@ -33,12 +38,37 @@ export default function SettingsScreen() {
         if (data.nationality) setNationality(data.nationality);
         if (data.profileAvatar) setProfileAvatar(data.profileAvatar);
         if (data.igCookies) setIgCookies(data.igCookies);
+        if (data.customBackendUrl) setCustomBackendUrl(data.customBackendUrl);
       } catch {
         // Silent fail — defaults remain
       }
     };
     loadProfile();
   }, []);
+
+  const testConnection = useCallback(async () => {
+    setConnectionStatus('checking');
+    setConnectionMsg('Pinging server...');
+    const targetUrl = (customBackendUrl.trim() || getServerBaseUrl()).replace(/\/+$/, '');
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 7000);
+      const res = await fetch(`${targetUrl}/api/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        setConnectionStatus('connected');
+        setConnectionMsg(`Online (${data.message || '200 OK'})`);
+        setActiveServerUrl(targetUrl);
+      } else {
+        setConnectionStatus('error');
+        setConnectionMsg(`HTTP ${res.status}`);
+      }
+    } catch (err: any) {
+      setConnectionStatus('error');
+      setConnectionMsg(err.message || 'Unreachable');
+    }
+  }, [customBackendUrl]);
 
   // ── PERFORMANCE: Stable callbacks via useCallback — prevents child re-renders
   const handleSaveProfile = useCallback(async () => {
@@ -221,6 +251,55 @@ export default function SettingsScreen() {
          </View>
       </View>
 
+      {/* Backend Server Section */}
+      <View style={[styles.settingsCard, { backgroundColor: themeColors.card, borderColor: themeColors.border }]}>
+         <Text style={[styles.sectionTitle, { color: themeColors.subText }]}>BACKEND SERVER</Text>
+
+         <View style={[styles.settingRow, { flexDirection: 'column', alignItems: 'flex-start', paddingVertical: 8 }]}>
+            <View style={styles.settingLabelRow}>
+               <Ionicons name="server" size={22} color={themeColors.text} style={styles.settingIcon} />
+               <Text style={[styles.settingText, { color: themeColors.text }]}>Server Endpoint</Text>
+            </View>
+            <Text style={[styles.storagePath, { color: themeColors.subText, marginBottom: 8 }]}>
+               Auto-connects to localhost:3000 (USB reverse), PC Wi-Fi, or Vercel Cloud.
+            </Text>
+            <TextInput
+               style={[styles.inputField, { color: themeColors.text, borderColor: themeColors.border, width: '100%', textAlign: 'left', paddingVertical: 10, paddingHorizontal: 12 }]}
+               value={customBackendUrl}
+               onChangeText={setCustomBackendUrl}
+               placeholder="Leave empty for Auto, or enter custom URL"
+               placeholderTextColor={themeColors.subText}
+               autoCapitalize="none"
+               autoCorrect={false}
+               onBlur={() => {
+                 AsyncStorage.setItem('customBackendUrl', customBackendUrl.trim()).catch(() => {});
+                 setActiveServerUrl(customBackendUrl.trim() || null);
+               }}
+            />
+            
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginTop: 12 }}>
+               <TouchableOpacity 
+                  style={[styles.testBtn, { backgroundColor: '#2563EB' }]} 
+                  onPress={testConnection}
+                  disabled={connectionStatus === 'checking'}
+               >
+                  <Text style={styles.testBtnText}>
+                     {connectionStatus === 'checking' ? 'Pinging...' : 'Test Connection'}
+                  </Text>
+               </TouchableOpacity>
+
+               {connectionStatus !== 'idle' && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                     <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: connectionStatus === 'connected' ? '#10B981' : '#EF4444', marginRight: 6 }} />
+                     <Text style={{ fontSize: 13, color: connectionStatus === 'connected' ? '#10B981' : '#EF4444', fontWeight: '600' }}>
+                        {connectionMsg}
+                     </Text>
+                  </View>
+               )}
+            </View>
+         </View>
+      </View>
+
       <View style={styles.versionContainer}>
          <Text style={[styles.versionText, { color: themeColors.subText }]}>App Version 1.0.0</Text>
          <Text style={[styles.versionSubtext, { color: themeColors.subText }]}>MyApp AIOD System</Text>
@@ -386,5 +465,15 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 40,
+  },
+  testBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  testBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

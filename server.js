@@ -102,6 +102,10 @@ app.get('/', (_req, res) => {
   res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'linkedin', 'snapchat', 'tiktok', 'twitter', 'pinterest', 'threads'] });
 });
 
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', message: 'Backend is healthy', timestamp: new Date().toISOString() });
+});
+
 // ===================== AUTH ENDPOINTS REMOVED =====================
 
 
@@ -456,6 +460,18 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
     console.log('Supported: YouTube (single + playlists), Instagram, Facebook, Snapchat, LinkedIn');
+
+    // Automatically configure ADB reverse proxy for physical Android devices
+    try {
+      const { exec } = require('child_process');
+      exec(`adb reverse tcp:${PORT} tcp:${PORT}`, (err) => {
+        if (!err) {
+          console.log(`[ADB] Successfully reversed port ${PORT} to connected Android device(s)`);
+        }
+      });
+    } catch {
+      // Ignore if adb is not present
+    }
   });
 }
 

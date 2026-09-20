@@ -3,7 +3,7 @@ import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Platfo
 import { Ionicons } from '@expo/vector-icons';
 
 import { LinearGradient } from 'expo-linear-gradient';
-// Constants removed
+import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { documentDirectory, createDownloadResumable } from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
@@ -55,19 +55,33 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
 MediaOptionItem.displayName = 'MediaOptionItem';
 
 // ========== SERVER CONFIGURATION ==========
-// Backend is deployed on Vercel
-// IMPORTANT: Replace this URL with your exact Vercel deployment URL (e.g., https://my-app-xxx.vercel.app)
-const VERCEL_URL = 'https://my-app-gamma-nine-21.vercel.app';
+export const VERCEL_URL = 'https://my-app-gamma-nine-21.vercel.app';
+
+let activeWorkingUrl: string | null = null;
+
+export const getMetroHostIp = (): string | null => {
+  try {
+    const hostUri = Constants.expoConfig?.hostUri || (Constants as any)?.manifest2?.extra?.expoClient?.hostUri;
+    if (hostUri) {
+      return hostUri.split(':')[0];
+    }
+  } catch {}
+  return null;
+};
+
+export const setActiveServerUrl = (url: string | null) => {
+  activeWorkingUrl = url ? url.trim() : null;
+};
 
 /** Resolves the backend server base URL */
 export const getServerBaseUrl = (): string => {
+  if (activeWorkingUrl) return activeWorkingUrl;
+
   if (process.env.EXPO_PUBLIC_API_URL) {
     return process.env.EXPO_PUBLIC_API_URL;
   }
 
   if (__DEV__) {
-    // We have set up ADB reverse proxy (adb reverse tcp:3000 tcp:3000)
-    // so the physical Android device can talk to localhost natively.
     return 'http://localhost:3000';
   }
   return VERCEL_URL;
@@ -351,12 +365,9 @@ export default function HomeScreen() {
     setAnalyzing(true);
     setResult(null);
 
-    try {
-      const baseUrl = getServerBaseUrl();
-      const apiUrl = `${baseUrl}/api/media/analyze`;
-      
-      console.log('Connecting to:', apiUrl);
+    const candidates: string[] = [];
 
+    try {
       // Load Instagram Cookies from AsyncStorage
       let igCookies = '';
       try {
@@ -364,17 +375,73 @@ export default function HomeScreen() {
         if (storedCookies) igCookies = storedCookies;
       } catch {}
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout — Render free tier cold starts can take 50+ seconds
+      // Check for user-defined custom server URL
+      let userCustomUrl: string | null = null;
+      try {
+        userCustomUrl = await AsyncStorage.getItem('customBackendUrl');
+      } catch {}
 
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, igCookies }),
-        signal: controller.signal,
-      });
+      if (userCustomUrl && userCustomUrl.trim()) {
+        candidates.push(userCustomUrl.trim().replace(/\/+$/, ''));
+      }
 
-      clearTimeout(timeoutId);
+      const defaultUrl = getServerBaseUrl();
+      if (!candidates.includes(defaultUrl)) {
+        candidates.push(defaultUrl);
+      }
+
+      if (__DEV__) {
+        if (!candidates.includes('http://localhost:3000')) {
+          candidates.push('http://localhost:3000');
+        }
+        const metroIp = getMetroHostIp();
+        if (metroIp && metroIp !== 'localhost' && metroIp !== '127.0.0.1') {
+          const lanUrl = `http://${metroIp}:3000`;
+          if (!candidates.includes(lanUrl)) {
+            candidates.push(lanUrl);
+          }
+        }
+      }
+
+      if (!candidates.includes(VERCEL_URL)) {
+        candidates.push(VERCEL_URL);
+      }
+
+      let response: Response | null = null;
+      let lastNetworkError: any = null;
+
+      for (const candidateUrl of candidates) {
+        try {
+          const apiUrl = `${candidateUrl}/api/media/analyze`;
+          console.log('[Analyze] Trying endpoint:', apiUrl);
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+          const res = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, igCookies }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+
+          if (res) {
+            response = res;
+            setActiveServerUrl(candidateUrl);
+            console.log('[Analyze] Successfully connected to:', candidateUrl);
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`[Analyze] Candidate ${candidateUrl} failed:`, err.message);
+          lastNetworkError = err;
+          // Continue to next candidate
+        }
+      }
+
+      if (!response) {
+        throw lastNetworkError || new Error('All backend server candidates failed to respond.');
+      }
 
       const responseText = await response.text();
       let data;
@@ -399,12 +466,11 @@ export default function HomeScreen() {
     } catch (error: any) {
       setAnalyzing(false);
       if (error.name === 'AbortError') {
-        Alert.alert('Timeout', 'The server took too long to respond.\n\nMake sure:\n1. Backend server is running (node server.js)\n2. Phone and PC are on the same Wi-Fi network');
-      } else if (error.message?.includes('Network request failed')) {
-        const baseUrl = getServerBaseUrl();
+        Alert.alert('Timeout', 'The server took too long to respond.\n\nMake sure:\n1. Backend server is running (npm run backend)\n2. Run "npm run reverse" if using USB');
+      } else if (error.message?.includes('Network request failed') || error.message?.includes('failed to respond')) {
         Alert.alert(
           'Connection Failed',
-          `Cannot reach backend server.\n\nTrying: ${baseUrl}\n\n✅ Make sure:\n1. Your device has internet access\n2. The Render server is awake and running`
+          `Cannot reach backend server.\n\nTried:\n${candidates.join('\n')}\n\nTroubleshooting tips:\n1. Ensure backend is running: npm run backend\n2. For USB devices, run: npm run reverse\n3. For Wi-Fi, ensure your phone and PC share the same Wi-Fi`
         );
       } else {
         Alert.alert('Extraction Error', error.message);

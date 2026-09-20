@@ -9,6 +9,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "backend": "node server.js",
+    "reverse": "adb reverse tcp:3000 tcp:3000",
     "vercel-build": "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp && chmod a+rx yt-dlp"
   },
   "dependencies": {
