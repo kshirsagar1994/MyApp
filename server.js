@@ -266,7 +266,8 @@ app.get('/api/media/download', async (req, res) => {
           '--no-playlist',
           '--no-warnings',
           '--no-check-certificates',
-          '--js-runtimes', 'node'
+          '--js-runtimes', 'node',
+          '--extractor-args', 'youtube:player_client=android,ios,web'
         ];
         
         let tempFile = null;
