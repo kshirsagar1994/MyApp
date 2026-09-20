@@ -315,6 +315,11 @@ app.get('/api/media/download', async (req, res) => {
             });
           } else {
             console.error(`yt-dlp exited with code ${code}: ${ytStderr}`);
+            if (mediaUrl && !res.headersSent) {
+              console.log('[Download] Falling back to direct redirect for mediaUrl');
+              try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
+              return res.redirect(mediaUrl);
+            }
             if (!res.headersSent) res.status(500).json({ error: `yt-dlp failed (code ${code}): ${ytStderr.trim().split('\n').pop() || 'unknown'}` });
             try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
           }
