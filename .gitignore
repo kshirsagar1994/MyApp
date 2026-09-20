@@ -66,6 +66,7 @@ app-example
 
 # --- Server-side Binaries & Old Backups ---
 yt-dlp.exe
+yt-dlp
 yt-dlp.exe.*
 *.old
 

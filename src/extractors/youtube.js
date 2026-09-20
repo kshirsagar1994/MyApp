@@ -18,35 +18,24 @@ const ensureYtdlp = async () => {
 
   const tmpPath = path.join(os.tmpdir(), 'yt-dlp');
 
-  // 1. If /tmp/yt-dlp already exists
+  // 1. Check if valid standalone binary already cached in /tmp (must be > 20MB for self-contained yt-dlp_linux)
   if (fs.existsSync(tmpPath)) {
-    try { fs.chmodSync(tmpPath, 0o755); } catch {}
-    return tmpPath;
-  }
-
-  // 2. Check bundled binary in repo root
-  const rootBinary = path.resolve(__dirname, '..', '..', 'yt-dlp');
-  if (fs.existsSync(rootBinary)) {
     try {
-      // In Vercel serverless, /var/task is read-only and noexec.
-      // Copying to /tmp gives full execution permissions.
-      fs.copyFileSync(rootBinary, tmpPath);
-      fs.chmodSync(tmpPath, 0o755);
-      console.log('[yt-dlp] Copied bundled binary to', tmpPath);
-      return tmpPath;
-    } catch (err) {
-      console.warn('[yt-dlp] Copy bundled binary failed:', err.message);
-      try {
-        fs.chmodSync(rootBinary, 0o755);
-        return rootBinary;
-      } catch {}
-    }
+      const stat = fs.statSync(tmpPath);
+      if (stat.size > 20 * 1024 * 1024) {
+        fs.chmodSync(tmpPath, 0o755);
+        return tmpPath;
+      } else {
+        console.log('[yt-dlp] Removing old non-standalone binary from /tmp (size:', stat.size, 'bytes)...');
+        try { fs.unlinkSync(tmpPath); } catch {}
+      }
+    } catch {}
   }
 
-  // 3. Download standalone Linux yt-dlp binary to /tmp on demand
-  console.log('[yt-dlp] Downloading Linux binary to', tmpPath, 'on Vercel...');
+  // 2. Download standalone self-contained Linux binary (yt-dlp_linux contains embedded Python)
+  console.log('[yt-dlp] Downloading self-contained yt-dlp_linux to', tmpPath, '...');
   const https = require('https');
-  const downloadUrl = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+  const downloadUrl = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux';
 
   await new Promise((resolve, reject) => {
     const fetchBinary = (url, depth = 0) => {

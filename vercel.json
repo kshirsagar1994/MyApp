@@ -5,7 +5,6 @@
       "src": "server.js",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["yt-dlp"],
         "maxDuration": 60
       }
     }
