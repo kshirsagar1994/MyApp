@@ -241,6 +241,7 @@ app.get('/api/media/download', async (req, res) => {
         }
 
         const isAudio = safeName.endsWith('.mp3') || safeName.endsWith('.m4a');
+        const ext = isAudio ? 'm4a' : 'mp4';
 
         if (needsMerge) {
           formatArg = `${itag}/bestvideo+bestaudio/best`;
@@ -252,27 +253,21 @@ app.get('/api/media/download', async (req, res) => {
           formatArg = 'best[ext=mp4][acodec!=none]/best[acodec!=none]/best';
         }
 
-        res.setHeader('Content-Type', isAudio ? 'audio/mp4' : 'video/mp4');
-        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-
         console.log(`[Download] yt-dlp: ${ytUrl} format=${formatArg} needsMerge=${needsMerge}`);
+
+        const tempFile = path.join(os.tmpdir(), `temp_yt_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`);
 
         const args = [
           '-f', formatArg,
           '--no-playlist',
           '--no-warnings',
           '--no-check-certificates',
-          '--js-runtimes', 'node'
+          '--js-runtimes', `node:${process.execPath}`,
+          '-o', tempFile
         ];
-        
-        let tempFile = null;
+
         if (needsMerge) {
-          // FIX Bug 4: Merge to temp file in writable os.tmpdir(), then stream — yt-dlp can't merge to stdout
-          tempFile = path.join(os.tmpdir(), `temp_merge_${Date.now()}_${Math.floor(Math.random() * 1000)}.mp4`);
-          args.push('--merge-output-format', 'mp4', '-o', tempFile);
-        } else {
-          // Single pre-merged stream → pipe directly to response (fast, no temp file)
-          args.push('-o', '-');
+          args.push('--merge-output-format', 'mp4');
         }
 
         const cookiesPath = path.join(__dirname, 'cookies.txt');
@@ -287,47 +282,43 @@ app.get('/api/media/download', async (req, res) => {
 
         const ytProcess = spawn(ytdlpPath, args, { windowsHide: true });
         
-        // Clean up temp cookie file when process finishes
-        const cleanupTempFile = () => { if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (_e) {} };
-        
-        if (!needsMerge) {
-          ytProcess.stdout.pipe(res);
-        }
+        const cleanupTempFile = () => {
+          if (tempIgCookieFile) try { fs.unlinkSync(tempIgCookieFile); } catch (_e) {}
+        };
         
         ytProcess.stderr.on('data', (data) => console.log('yt-dlp stderr:', data.toString().trim()));
         
         ytProcess.on('error', (err) => {
+          cleanupTempFile();
           console.error('yt-dlp spawn error:', err.message);
           if (!res.headersSent) res.status(500).json({ error: err.message });
         });
         
         ytProcess.on('close', (code) => {
           cleanupTempFile();
-          if (needsMerge) {
-            if (code === 0 && fs.existsSync(tempFile)) {
-              const stat = fs.statSync(tempFile);
-              res.setHeader('Content-Length', stat.size);
-              const readStream = fs.createReadStream(tempFile);
-              readStream.pipe(res);
-              readStream.on('close', () => { try { fs.unlinkSync(tempFile); } catch (_e) {} });
-              readStream.on('error', () => {
-                if (!res.headersSent) res.status(500).end();
-                try { fs.unlinkSync(tempFile); } catch (_e) {}
-              });
-            } else {
-              if (!res.headersSent) res.status(500).json({ error: `yt-dlp merge failed (code ${code}). Ensure ffmpeg is installed.` });
-              try { if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
-            }
+          if (code === 0 && fs.existsSync(tempFile)) {
+            const stat = fs.statSync(tempFile);
+            res.setHeader('Content-Type', isAudio ? 'audio/mp4' : 'video/mp4');
+            res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+            res.setHeader('Content-Length', stat.size);
+            const readStream = fs.createReadStream(tempFile);
+            readStream.pipe(res);
+            readStream.on('close', () => { try { fs.unlinkSync(tempFile); } catch (_e) {} });
+            readStream.on('error', () => {
+              if (!res.headersSent) res.status(500).end();
+              try { fs.unlinkSync(tempFile); } catch (_e) {}
+            });
           } else {
-            if (code !== 0 && !res.headersSent) res.status(500).json({ error: `yt-dlp exited with code ${code}` });
+            console.error(`yt-dlp exited with code ${code}`);
+            if (!res.headersSent) res.status(500).json({ error: `yt-dlp failed (code ${code})` });
+            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
           }
         });
         
         req.on('close', () => {
           ytProcess.kill();
-          // Clean up temp file if client disconnects during merge
-          if (tempFile) {
-            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_e) {}
+          if (fs.existsSync(tempFile)) {
+            try { fs.unlinkSync(tempFile); } catch (_e) {}
           }
         });
         return;
