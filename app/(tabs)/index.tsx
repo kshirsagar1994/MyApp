@@ -92,6 +92,8 @@ export default function HomeScreen() {
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [activeDownloads, setActiveDownloads] = useState<any[]>([]);
+  const [activeCategoryTab, setActiveCategoryTab] = useState<'all' | 'video' | 'audio' | 'image'>('all');
+  
   // YouTube download modal state
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [selectedDownloadTab, setSelectedDownloadTab] = useState<'video' | 'audio'>('video');
@@ -108,6 +110,21 @@ export default function HomeScreen() {
     primary: '#3B82F6',
     secondary: '#10B981',
   }), [isDark]);
+
+  // Filtered options based on selected category tab
+  const filteredOptions = useMemo(() => {
+    if (!result || !result.options) return [];
+    if (activeCategoryTab === 'video') {
+      return result.options.filter((o: any) => !o.isAudio && !o.isImage && o.format !== 'MP3' && o.format !== 'M4A' && !o.quality?.toLowerCase().includes('photo'));
+    }
+    if (activeCategoryTab === 'audio') {
+      return result.options.filter((o: any) => o.isAudio || o.format === 'MP3' || o.format === 'M4A' || o.quality?.toLowerCase().includes('audio'));
+    }
+    if (activeCategoryTab === 'image') {
+      return result.options.filter((o: any) => o.isImage || o.format === 'JPG' || o.format === 'PNG' || o.format === 'WEBP' || o.quality?.toLowerCase().includes('photo'));
+    }
+    return result.options;
+  }, [result, activeCategoryTab]);
 
   // ── PERFORMANCE: Throttle ref (unused removed)
   
@@ -236,8 +253,6 @@ export default function HomeScreen() {
       }
 
       // 3. Perform final local download
-      setActiveDownloads(prev => prev.map(d => d.id === newDownload.id ? { ...d, progress: 100, speed: 'Saving file...' } : d));
-      
       if (Platform.OS === 'web') {
           // Fallback web fetch handling for queued final URL
           const res = await fetch(finalDownloadUrl);
@@ -251,14 +266,34 @@ export default function HomeScreen() {
           document.body.removeChild(a);
           URL.revokeObjectURL(blobUrl);
           
+          setActiveDownloads(prev => prev.map(d => d.id === newDownload.id ? { ...d, progress: 100, speed: 'Complete' } : d));
           setTimeout(() => { setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id)); }, 1500);
           return;
       }
 
+      const downloadProgressCallback = (downloadProgress: any) => {
+        const total = downloadProgress.totalBytesExpectedToWrite;
+        const written = downloadProgress.totalBytesWritten;
+        if (total > 0) {
+          const percent = Math.min(Math.max(Math.round((written / total) * 100), 1), 100);
+          const writtenMB = (written / (1024 * 1024)).toFixed(1);
+          const totalMB = (total / (1024 * 1024)).toFixed(1);
+          setActiveDownloads(prev => prev.map(d => 
+            d.id === newDownload.id ? { ...d, progress: percent, speed: `${percent}% • ${writtenMB} MB / ${totalMB} MB` } : d
+          ));
+        } else {
+          const writtenMB = (written / (1024 * 1024)).toFixed(1);
+          setActiveDownloads(prev => prev.map(d => 
+            d.id === newDownload.id ? { ...d, progress: -1, speed: `Downloading • ${writtenMB} MB` } : d
+          ));
+        }
+      };
+
       const downloadResumable = createDownloadResumable(
         finalDownloadUrl,
         fileUri,
-        { headers: downloadHeaders }
+        { headers: downloadHeaders },
+        downloadProgressCallback
       );
       
       downloadTasks.current[newDownload.id] = downloadResumable;
@@ -402,38 +437,44 @@ export default function HomeScreen() {
         candidates.push(userCustomUrl.trim().replace(/\/+$/, ''));
       }
 
-      const defaultUrl = getServerBaseUrl();
-      if (!candidates.includes(defaultUrl)) {
-        candidates.push(defaultUrl);
+      // If we previously connected to a working server, try it first
+      if (activeWorkingUrl && !candidates.includes(activeWorkingUrl)) {
+        candidates.push(activeWorkingUrl);
       }
 
-      if (__DEV__) {
-        if (!candidates.includes('http://localhost:3000')) {
-          candidates.push('http://localhost:3000');
-        }
-        const metroIp = getMetroHostIp();
-        if (metroIp && metroIp !== 'localhost' && metroIp !== '127.0.0.1') {
-          const lanUrl = `http://${metroIp}:3000`;
-          if (!candidates.includes(lanUrl)) {
-            candidates.push(lanUrl);
-          }
+      // Check local adb-reverse / local server
+      if (!candidates.includes('http://localhost:3000')) {
+        candidates.push('http://localhost:3000');
+      }
+
+      // Check Metro / LAN IP if available
+      const metroIp = getMetroHostIp();
+      if (metroIp && metroIp !== 'localhost' && metroIp !== '127.0.0.1') {
+        const lanUrl = `http://${metroIp}:3000`;
+        if (!candidates.includes(lanUrl)) {
+          candidates.push(lanUrl);
         }
       }
 
+      // Vercel serverless deployment
       if (!candidates.includes(VERCEL_URL)) {
         candidates.push(VERCEL_URL);
       }
 
-      let response: Response | null = null;
-      let lastNetworkError: any = null;
+      let successfulData: any = null;
+      let lastErrorMessage = '';
 
       for (const candidateUrl of candidates) {
         try {
           const apiUrl = `${candidateUrl}/api/media/analyze`;
           console.log('[Analyze] Trying endpoint:', apiUrl);
 
+          // Fast 4s timeout for local candidate probes so if local backend isn't up, it fails fast to Vercel
+          const isLocal = candidateUrl.includes('localhost') || candidateUrl.includes('127.0.0.1') || (metroIp && candidateUrl.includes(metroIp));
+          const probeTimeoutMs = isLocal ? 4000 : 60000;
+
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 60000);
+          const timeoutId = setTimeout(() => controller.abort(), probeTimeoutMs);
 
           const res = await fetch(apiUrl, {
             method: 'POST',
@@ -444,41 +485,40 @@ export default function HomeScreen() {
           clearTimeout(timeoutId);
 
           if (res) {
-            response = res;
-            setActiveServerUrl(candidateUrl);
-            console.log('[Analyze] Successfully connected to:', candidateUrl);
-            break;
+            const responseText = await res.text();
+            let data: any = null;
+            try {
+              data = JSON.parse(responseText);
+            } catch {
+              console.warn(`[Analyze] Candidate ${candidateUrl} returned non-JSON response`);
+            }
+
+            if (data && data.status === 'success' && data.data) {
+              successfulData = data.data;
+              setActiveServerUrl(candidateUrl);
+              console.log('[Analyze] Successfully extracted media using:', candidateUrl);
+              break;
+            } else if (data && data.message) {
+              lastErrorMessage = data.message;
+              console.warn(`[Analyze] Candidate ${candidateUrl} failed with:`, data.message);
+            }
           }
         } catch (err: any) {
-          console.warn(`[Analyze] Candidate ${candidateUrl} failed:`, err.message);
-          lastNetworkError = err;
-          // Continue to next candidate
+          console.warn(`[Analyze] Candidate ${candidateUrl} connection error:`, err.message);
+          if (!lastErrorMessage) lastErrorMessage = err.message;
         }
       }
 
-      if (!response) {
-        throw lastNetworkError || new Error('All backend server candidates failed to respond.');
+      if (!successfulData) {
+        throw new Error(lastErrorMessage || 'Extraction failed across all backend servers. Please check the URL or your connection.');
       }
 
-      const responseText = await response.text();
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        // If the server returns HTML (e.g. Vercel Application Error) instead of JSON
-        throw new Error(
-          response.status !== 200 
-            ? `Server error (${response.status}): ${responseText.substring(0, 60).replace(/<[^>]+>/g, '').trim()}...`
-            : 'Server returned an invalid response. Please check your backend connection.'
-        );
-      }
-
-      if (data.status === 'success') {
-        // Pass the igCookies down to the download handler by embedding it in the result
-        setResult({ ...data.data, platform: platformInfo.platform, options: data.data.options?.map((opt: any) => ({ ...opt, igCookies })) });
-      } else {
-        throw new Error(data.message || 'Extraction failed');
-      }
+      // Pass the igCookies down to the download handler by embedding it in the result
+      setResult({
+        ...successfulData,
+        platform: platformInfo.platform,
+        options: successfulData.options?.map((opt: any) => ({ ...opt, igCookies }))
+      });
       setAnalyzing(false);
     } catch (error: any) {
       setAnalyzing(false);
@@ -552,31 +592,62 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {/* YouTube single video: show a single Download button → opens quality modal */}
-            {result.platform === 'youtube' && result.type !== 'playlist' ? (
-              <TouchableOpacity
-                style={styles.ytDownloadBtn}
-                onPress={() => { setSelectedDownloadTab('video'); setShowDownloadModal(true); }}
-              >
-                <LinearGradient colors={['#10B981', '#059669']} style={styles.ytDownloadBtnGradient}>
-                  <Ionicons name="download-outline" size={22} color="#FFF" />
-                  <Text style={styles.ytDownloadBtnText}>DOWNLOAD</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            ) : (
-              /* Non-YouTube or playlist: keep existing flat option list */
-              result.options.map((opt: any, index: number) => (
-                <MediaOptionItem
-                  key={index}
-                  opt={opt}
-                  index={index}
-                  isDark={isDark}
-                  themeColors={themeColors}
-                  onDownload={handleStartDownload}
-                  onPlaylistDownload={handlePlaylistDownloadAll}
-                />
-              ))
+            {/* Category Filter Pills (All, Videos, Audio, Photos) */}
+            {result.options.length > 1 && (
+              <View style={[styles.categoryFilterRow, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' }]}>
+                <TouchableOpacity
+                  style={[styles.categoryFilterPill, activeCategoryTab === 'all' && styles.categoryFilterPillActive]}
+                  onPress={() => setActiveCategoryTab('all')}
+                >
+                  <Text style={[styles.categoryFilterText, activeCategoryTab === 'all' && styles.categoryFilterTextActive]}>
+                    All ({result.options.length})
+                  </Text>
+                </TouchableOpacity>
+                {result.options.some((o: any) => !o.isAudio && !o.isImage && o.format !== 'MP3' && o.format !== 'M4A' && !o.quality?.toLowerCase().includes('photo')) && (
+                  <TouchableOpacity
+                    style={[styles.categoryFilterPill, activeCategoryTab === 'video' && styles.categoryFilterPillActiveVideo]}
+                    onPress={() => setActiveCategoryTab('video')}
+                  >
+                    <Text style={[styles.categoryFilterText, activeCategoryTab === 'video' && styles.categoryFilterTextActive]}>
+                      🎥 Videos
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {result.options.some((o: any) => o.isAudio || o.format === 'MP3' || o.format === 'M4A' || o.quality?.toLowerCase().includes('audio')) && (
+                  <TouchableOpacity
+                    style={[styles.categoryFilterPill, activeCategoryTab === 'audio' && styles.categoryFilterPillActiveAudio]}
+                    onPress={() => setActiveCategoryTab('audio')}
+                  >
+                    <Text style={[styles.categoryFilterText, activeCategoryTab === 'audio' && styles.categoryFilterTextActive]}>
+                      🎵 Audio
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {result.options.some((o: any) => o.isImage || o.format === 'JPG' || o.format === 'PNG' || o.format === 'WEBP' || o.quality?.toLowerCase().includes('photo')) && (
+                  <TouchableOpacity
+                    style={[styles.categoryFilterPill, activeCategoryTab === 'image' && styles.categoryFilterPillActiveImage]}
+                    onPress={() => setActiveCategoryTab('image')}
+                  >
+                    <Text style={[styles.categoryFilterText, activeCategoryTab === 'image' && styles.categoryFilterTextActive]}>
+                      🖼️ Photos
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             )}
+
+            {/* List of All Available Qualities & Formats */}
+            {filteredOptions.map((opt: any, index: number) => (
+              <MediaOptionItem
+                key={index}
+                opt={opt}
+                index={index}
+                isDark={isDark}
+                themeColors={themeColors}
+                onDownload={handleStartDownload}
+                onPlaylistDownload={handlePlaylistDownloadAll}
+              />
+            ))}
           </Animated.View>
         )}
 
@@ -982,4 +1053,38 @@ const styles = StyleSheet.create({
   progressFill: { height: '100%', backgroundColor: '#3B82F6', borderRadius: 3 },
   progressSpeed: { fontSize: 11, color: '#8FA1B3' },
   controlBtn: { padding: 4, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 8 },
+
+  categoryFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    padding: 6,
+    borderRadius: 12,
+    marginVertical: 12,
+  },
+  categoryFilterPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  categoryFilterPillActive: {
+    backgroundColor: '#3B82F6',
+  },
+  categoryFilterPillActiveVideo: {
+    backgroundColor: '#10B981',
+  },
+  categoryFilterPillActiveAudio: {
+    backgroundColor: '#8B5CF6',
+  },
+  categoryFilterPillActiveImage: {
+    backgroundColor: '#EC4899',
+  },
+  categoryFilterText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#8FA1B3',
+  },
+  categoryFilterTextActive: {
+    color: '#FFFFFF',
+  },
 });

@@ -272,7 +272,7 @@ app.get('/api/media/download', async (req, res) => {
 
         const cookiesPath = path.join(__dirname, 'cookies.txt');
         let tempIgCookieFile = null;
-        if (igCookies) {
+        if (igCookies && (mediaUrl?.includes('instagram.com') || mediaUrl?.includes('threads.net'))) {
            tempIgCookieFile = createTempCookieFile(igCookies);
            args.push('--cookies', tempIgCookieFile);
         } else if (fs.existsSync(cookiesPath)) {

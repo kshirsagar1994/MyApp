@@ -239,7 +239,10 @@ export default function SettingsScreen() {
             <TextInput
                style={[styles.inputField, { color: themeColors.text, borderColor: themeColors.border, width: '100%', textAlign: 'left', paddingVertical: 10, paddingHorizontal: 12, minHeight: 60 }]}
                value={igCookies}
-               onChangeText={setIgCookies}
+               onChangeText={(text) => {
+                 setIgCookies(text);
+                 AsyncStorage.setItem('igCookies', text).catch(() => {});
+               }}
                placeholder="sessionid=abc; csrftoken=xyz; ds_user_id=123; ..."
                placeholderTextColor={themeColors.subText}
                multiline
@@ -248,6 +251,22 @@ export default function SettingsScreen() {
                  AsyncStorage.setItem('igCookies', igCookies).catch(() => {});
                }}
             />
+            <TouchableOpacity
+               style={{
+                 marginTop: 10,
+                 backgroundColor: '#E1306C',
+                 paddingVertical: 8,
+                 paddingHorizontal: 16,
+                 borderRadius: 8,
+                 alignSelf: 'flex-start'
+               }}
+               onPress={async () => {
+                 await AsyncStorage.setItem('igCookies', igCookies);
+                 Alert.alert('Saved ✅', 'Instagram Cookies saved successfully!');
+               }}
+            >
+               <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 13 }}>💾 Save Cookies</Text>
+            </TouchableOpacity>
          </View>
       </View>
 

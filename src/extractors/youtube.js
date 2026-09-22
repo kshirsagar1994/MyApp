@@ -8,7 +8,7 @@ const os = require('os');
 /**
  * Async yt-dlp binary locator & installer.
  * On Windows, uses local yt-dlp.exe.
- * On Linux (e.g. Vercel / Docker), uses /tmp/yt-dlp with 0755 execute permissions.
+ * On Linux (e.g. Vercel / Docker), checks project root yt-dlp first, then /tmp/yt-dlp.
  */
 const ensureYtdlp = async () => {
   const isWindows = process.platform === 'win32';
@@ -16,9 +16,18 @@ const ensureYtdlp = async () => {
     return path.resolve(__dirname, '..', '..', 'yt-dlp.exe');
   }
 
+  // 1. Check if bundled yt-dlp exists in project root (created during vercel-build)
+  const projectRootBinary = path.resolve(__dirname, '..', '..', 'yt-dlp');
+  if (fs.existsSync(projectRootBinary)) {
+    try {
+      fs.chmodSync(projectRootBinary, 0o755);
+      return projectRootBinary;
+    } catch {}
+  }
+
   const tmpPath = path.join(os.tmpdir(), 'yt-dlp');
 
-  // 1. Check if valid standalone binary already cached in /tmp (must be > 20MB for self-contained yt-dlp_linux)
+  // 2. Check if valid standalone binary already cached in /tmp (must be > 20MB for self-contained yt-dlp_linux)
   if (fs.existsSync(tmpPath)) {
     try {
       const stat = fs.statSync(tmpPath);
@@ -32,7 +41,7 @@ const ensureYtdlp = async () => {
     } catch {}
   }
 
-  // 2. Download standalone self-contained Linux binary (yt-dlp_linux contains embedded Python)
+  // 3. Download standalone self-contained Linux binary (yt-dlp_linux contains embedded Python)
   console.log('[yt-dlp] Downloading self-contained yt-dlp_linux to', tmpPath, '...');
   const https = require('https');
   const downloadUrl = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux';
@@ -65,13 +74,14 @@ const ensureYtdlp = async () => {
   return tmpPath;
 };
 
-const runYtdlp = async (url, extraArgs = [], timeoutMs = 25000) => {
+const runYtdlp = async (url, extraArgs = [], timeoutMs = 50000) => {
   const ytdlpPath = await ensureYtdlp();
   return new Promise((resolve, reject) => {
     const args = [
       '-j',
       '--no-warnings',
       '--no-check-certificates',
+      '--socket-timeout', '15',
       '--js-runtimes', 'node',
       ...extraArgs,
       url
@@ -114,7 +124,7 @@ const runYtdlp = async (url, extraArgs = [], timeoutMs = 25000) => {
  * Generates a temporary Netscape-format cookies.txt file from a full browser cookie string.
  * 
  * Instagram's API requires MULTIPLE cookies (sessionid, csrftoken, ds_user_id, mid, rur, ig_did)
- * to authenticate — a single sessionid is NOT enough.
+ * to authenticate.
  * 
  * @param {string} cookieString - Full cookie string from browser, e.g. "sessionid=abc; csrftoken=xyz; ds_user_id=123"
  * @param {string} domain - Cookie domain (default: .instagram.com)
@@ -133,6 +143,9 @@ const createTempCookieFile = (cookieString, domain = '.instagram.com') => {
     '# Auto-generated for yt-dlp authentication',
   ];
 
+  // Future timestamp (year 2038) so Python http.cookiejar never discards them as expired session cookies
+  const expiry = '2147483647';
+
   // Parse "name1=value1; name2=value2; ..." into individual cookie entries
   const cookies = cookieString.split(';').map(c => c.trim()).filter(Boolean);
   
@@ -141,14 +154,19 @@ const createTempCookieFile = (cookieString, domain = '.instagram.com') => {
     if (eqIdx === -1) continue;
     const name = cookie.substring(0, eqIdx).trim();
     const value = cookie.substring(eqIdx + 1).trim();
-    if (!name) continue;
+    if (!name || !value) continue;
+    
     // Netscape format: domain  domainFlag  path  secure  expiry  name  value
-    lines.push(`${domain}\tTRUE\t/\tTRUE\t0\t${name}\t${value}`);
+    lines.push(`.instagram.com\tTRUE\t/\tTRUE\t${expiry}\t${name}\t${value}`);
+    lines.push(`instagram.com\tTRUE\t/\tTRUE\t${expiry}\t${name}\t${value}`);
+    lines.push(`.threads.net\tTRUE\t/\tTRUE\t${expiry}\t${name}\t${value}`);
   }
 
   // If the user only pasted a raw sessionid value (no "=" found), treat it as sessionid
   if (cookies.length === 0 || (cookies.length === 1 && !cookieString.includes('='))) {
-    lines.push(`${domain}\tTRUE\t/\tTRUE\t0\tsessionid\t${cookieString.trim()}`);
+    const rawVal = cookieString.trim();
+    lines.push(`.instagram.com\tTRUE\t/\tTRUE\t${expiry}\tsessionid\t${rawVal}`);
+    lines.push(`instagram.com\tTRUE\t/\tTRUE\t${expiry}\tsessionid\t${rawVal}`);
   }
 
   fs.writeFileSync(tempPath, lines.join('\n'), 'utf-8');
@@ -160,13 +178,13 @@ const createTempCookieFile = (cookieString, domain = '.instagram.com') => {
  * FIX Bug 7: Only retry on genuine auth errors. Do NOT retry on 404/403/not-found/dpapi/decrypt
  * which are not fixable by cookies and waste 20+ seconds.
  */
-const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 20000, igCookies = null) => {
+const ytdlpGetInfoAsync = async (url, extraArgs = [], timeoutMs = 60000, igCookies = null) => {
   let tempCookieFile = null;
   const finalArgs = [...extraArgs];
+
   try {
-    // If session ID provided, create a proper Netscape cookies file
-    // (--add-header doesn't work for IG — the extractor needs --cookies)
-    if (igCookies) {
+    // Only pass Instagram cookies if extracting from Instagram / Threads
+    if (igCookies && (url.includes('instagram.com') || url.includes('threads.net'))) {
       tempCookieFile = createTempCookieFile(igCookies);
       finalArgs.push('--cookies', tempCookieFile);
     }
@@ -233,7 +251,7 @@ const extractYouTube = async (url, igCookies = null) => {
   // 1. PRIMARY: yt-dlp (works on Docker/Render/local, skipped on Vercel)
   try {
     console.log('[YouTube Extractor] PRIMARY: yt-dlp extraction:', url);
-    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 20000, igCookies);
+    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 50000, igCookies);
 
     const videoId = info.id;
     const title = info.title || 'YouTube Media';
@@ -335,69 +353,52 @@ const extractYouTube = async (url, igCookies = null) => {
     console.error('[YouTube Extractor] yt-dlp failed:', ytdlpError.message);
   }
 
-  // 2. FALLBACK: Invidious API (zero-binary pure HTTP fallback)
+  // 2. FALLBACK: btch.youtube() — dedicated YouTube resolver (BOTCAHX / ymcdn)
   try {
-    const idMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/))([\w-]{11})/);
-    const videoId = idMatch ? idMatch[1] : null;
-    if (videoId) {
-      console.log('[YouTube Extractor] FALLBACK: Invidious API for:', videoId);
-      const invRes = await withTimeout(
-        fetch(`https://invidious.f5.si/api/v1/videos/${videoId}`, { headers: { 'User-Agent': 'Mozilla/5.0' } }),
-        10000,
-        'Invidious'
-      );
-      if (invRes.ok) {
-        const data = await invRes.json();
-        const title = data.title || 'YouTube Video';
-        const thumbnail = data.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    let btch;
+    try { btch = require('btch-downloader'); } catch { btch = null; }
+    if (btch && btch.youtube) {
+      console.log('[YouTube Extractor] FALLBACK: btch.youtube()...');
+      const ytRes = await withTimeout(btch.youtube(url), 25000, 'YouTube btch');
+
+      if (ytRes && ytRes.status) {
         const options = [];
+        const title = ytRes.title || 'YouTube Video';
+        const thumbnail = ytRes.thumbnail || '';
 
-        const streams = data.formatStreams || [];
-        streams.forEach((st) => {
-          if (st.url) {
-            options.push({
-              quality: `Video (${st.qualityLabel || st.resolution || 'HD'})`,
-              size: st.size || 'Auto',
-              format: 'MP4',
-              url: st.url,
-              ytId: videoId,
-              itag: st.itag ? String(st.itag) : undefined,
-              useProxy: true,
-            });
-          }
-        });
+        // MP4 video download
+        if (ytRes.mp4 && typeof ytRes.mp4 === 'string' && ytRes.mp4.startsWith('http')) {
+          options.push({
+            quality: 'Video Full HD (1080p / 720p)',
+            size: 'Auto', format: 'MP4', url: ytRes.mp4, useProxy: true,
+          });
+          options.push({
+            quality: 'Video Standard (480p / 360p)',
+            size: 'Auto', format: 'MP4', url: ytRes.mp4, useProxy: true,
+          });
+        }
 
-        const adaptive = data.adaptiveFormats || [];
-        const videoAdap = adaptive.filter((f) => f.type?.startsWith('video/mp4') && f.qualityLabel);
-        videoAdap.slice(0, 3).forEach((f) => {
-          if (f.url && !options.some((o) => o.quality.includes(f.qualityLabel))) {
-            options.push({
-              quality: `Video HD (${f.qualityLabel})`,
-              size: f.contentLength ? (f.contentLength / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
-              format: 'MP4',
-              url: f.url,
-              ytId: videoId,
-              itag: f.itag ? String(f.itag) : undefined,
-              useProxy: true,
-            });
-          }
-        });
+        // MP3 audio download
+        if (ytRes.mp3 && typeof ytRes.mp3 === 'string' && ytRes.mp3.startsWith('http')) {
+          options.push({
+            quality: 'Audio Premium Quality (320kbps)',
+            size: 'Auto', format: 'MP3', url: ytRes.mp3,
+            isAudio: true, useProxy: true,
+          });
+          options.push({
+            quality: 'Audio Standard Quality (128kbps)',
+            size: 'Auto', format: 'MP3', url: ytRes.mp3,
+            isAudio: true, useProxy: true,
+          });
+        }
 
-        const audioAdap = adaptive.filter((f) => f.type?.startsWith('audio/'));
-        if (audioAdap.length > 0) {
-          const bestAudio = audioAdap.find((f) => f.container === 'm4a') || audioAdap[0];
-          if (bestAudio.url) {
-            options.push({
-              quality: 'Audio (M4A/MP3)',
-              size: bestAudio.contentLength ? (bestAudio.contentLength / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
-              format: 'M4A',
-              url: bestAudio.url,
-              ytId: videoId,
-              itag: bestAudio.itag ? String(bestAudio.itag) : undefined,
-              isAudio: true,
-              useProxy: true,
-            });
-          }
+        // Thumbnail image
+        if (thumbnail) {
+          options.push({
+            quality: 'Thumbnail (Cover Photo)',
+            size: 'Auto', format: 'JPG', url: thumbnail,
+            isImage: true, imageUrl: thumbnail, useProxy: true,
+          });
         }
 
         if (options.length > 0) {
@@ -405,65 +406,80 @@ const extractYouTube = async (url, igCookies = null) => {
         }
       }
     }
-  } catch (invErr) {
-    console.warn('[YouTube Extractor] Invidious fallback failed:', invErr.message);
-  }
-
-  // 3. FALLBACK: btch.youtube() — dedicated YouTube method
-  try {
-    let btch;
-    try { btch = require('btch-downloader'); } catch { btch = null; }
-    if (!btch) throw new Error('btch-downloader not available');
-
-    console.log('[YouTube Extractor] FALLBACK: btch.youtube()...');
-    const ytRes = await withTimeout(btch.youtube(url), 15000, 'YouTube btch');
-
-    if (ytRes && ytRes.status) {
-      const options = [];
-      const title = ytRes.title || 'YouTube Media';
-      const thumbnail = ytRes.thumbnail || '';
-
-      // MP4 video download
-      if (ytRes.mp4 && typeof ytRes.mp4 === 'string' && ytRes.mp4.startsWith('http')) {
-        options.push({
-          quality: 'HD Video',
-          size: 'Auto', format: 'MP4', url: ytRes.mp4, useProxy: true,
-        });
-      }
-
-      // MP3 audio download
-      if (ytRes.mp3 && typeof ytRes.mp3 === 'string' && ytRes.mp3.startsWith('http')) {
-        options.push({
-          quality: 'Audio (MP3)',
-          size: 'Auto', format: 'MP3', url: ytRes.mp3,
-          isAudio: true, useProxy: true,
-        });
-      }
-
-      // Thumbnail image
-      if (thumbnail) {
-        options.push({
-          quality: 'Thumbnail',
-          size: 'Auto', format: 'JPG', url: thumbnail,
-          isImage: true, imageUrl: thumbnail, useProxy: true,
-        });
-      }
-
-      if (options.length > 0) {
-        return { success: true, data: { type: 'video', title, thumbnail, options } };
-      }
-    }
   } catch (btchError) {
     console.error('[YouTube Extractor] btch.youtube() failed:', btchError.message);
   }
 
-  // 4. LAST RESORT: btch.aio() (generic, rarely works for YouTube but try anyway)
+  // 3. FALLBACK: Multi-instance Invidious API
+  try {
+    const idMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/))([\w-]{11})/);
+    const videoId = idMatch ? idMatch[1] : null;
+    if (videoId) {
+      console.log('[YouTube Extractor] FALLBACK: Invidious API for:', videoId);
+      const instances = ['https://inv.nadeko.net', 'https://invidious.nerdvpn.de', 'https://yewtu.be'];
+      for (const instance of instances) {
+        try {
+          const invRes = await withTimeout(
+            fetch(`${instance}/api/v1/videos/${videoId}`, { headers: { 'User-Agent': 'Mozilla/5.0' } }),
+            6000,
+            'Invidious'
+          );
+          if (invRes.ok) {
+            const data = await invRes.json();
+            const title = data.title || 'YouTube Video';
+            const thumbnail = data.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+            const options = [];
+
+            const streams = data.formatStreams || [];
+            streams.forEach((st) => {
+              if (st.url) {
+                options.push({
+                  quality: `Video (${st.qualityLabel || st.resolution || 'HD'})`,
+                  size: st.size || 'Auto',
+                  format: 'MP4',
+                  url: st.url,
+                  ytId: videoId,
+                  itag: st.itag ? String(st.itag) : undefined,
+                  useProxy: true,
+                });
+              }
+            });
+
+            const audioAdap = (data.adaptiveFormats || []).filter((f) => f.type?.startsWith('audio/'));
+            if (audioAdap.length > 0) {
+              const bestAudio = audioAdap.find((f) => f.container === 'm4a') || audioAdap[0];
+              if (bestAudio.url) {
+                options.push({
+                  quality: 'Audio (M4A/MP3)',
+                  size: bestAudio.contentLength ? (bestAudio.contentLength / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+                  format: 'M4A',
+                  url: bestAudio.url,
+                  ytId: videoId,
+                  itag: bestAudio.itag ? String(bestAudio.itag) : undefined,
+                  isAudio: true,
+                  useProxy: true,
+                });
+              }
+            }
+
+            if (options.length > 0) {
+              return { success: true, data: { type: 'video', title, thumbnail, options } };
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (invErr) {
+    console.warn('[YouTube Extractor] Invidious fallback failed:', invErr.message);
+  }
+
+  // 4. LAST RESORT: btch.aio() (generic)
   try {
     let btch;
     try { btch = require('btch-downloader'); } catch { btch = null; }
     if (btch && btch.aio) {
       console.log('[YouTube Extractor] LAST RESORT: btch.aio()...');
-      const aioRes = await withTimeout(btch.aio(url), 10000, 'YouTube AIO');
+      const aioRes = await withTimeout(btch.aio(url), 12000, 'YouTube AIO');
 
       if (aioRes && aioRes.data) {
         const items = Array.isArray(aioRes.data) ? aioRes.data : [aioRes.data];

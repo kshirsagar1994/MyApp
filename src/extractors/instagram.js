@@ -142,64 +142,81 @@ const extractInstagram = async (url, igCookies = null) => {
 
     // 2. RAPIDAPI FALLBACK (if configured)
     if (process.env.RAPIDAPI_KEY) {
-      try {
-        console.log('[Instagram] FALLBACK: RapidAPI...');
-        // Standard endpoint for 'Instagram Downloader' on RapidAPI
-        // Host: instagram-downloader-download-instagram-videos-stories.p.rapidapi.com
-        const rapidApiUrl = `https://instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com/get-info-rapidapi?url=${encodeURIComponent(url)}`;
-        
-        const response = await fetch(rapidApiUrl, {
-          method: 'GET',
-          headers: {
-            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
-            'X-RapidAPI-Host': 'instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com'
-          }
-        });
-        
-        const data = await response.json();
-        
-        if (data && (!data.error || (data.media && Array.isArray(data.media)))) {
-          let vCount = 0;
-          let pCount = 0;
+      const rapidApiKey = process.env.RAPIDAPI_KEY;
+      const rapidEndpoints = [
+        { host: 'instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com', path: `/get-info-rapidapi?url=${encodeURIComponent(url)}` },
+        { host: 'instagram-downloader-download-instagram-videos-stories.p.rapidapi.com', path: `/get-info-rapidapi?url=${encodeURIComponent(url)}` },
+        { host: 'instagram-media-downloader.p.rapidapi.com', path: `/rapid/instagram.php?url=${encodeURIComponent(url)}` },
+        { host: 'social-media-video-downloader.p.rapidapi.com', path: `/smvd/get/instagram?url=${encodeURIComponent(url)}` },
+      ];
+
+      for (const ep of rapidEndpoints) {
+        try {
+          console.log(`[Instagram] Trying RapidAPI host: ${ep.host}...`);
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 6000);
           
-          const mediaUrls = [];
-          if (data.download_url) mediaUrls.push(data.download_url);
-          if (data.media && Array.isArray(data.media)) mediaUrls.push(...data.media);
-          
-          mediaUrls.forEach((mUrl) => {
-            if (typeof mUrl !== 'string') return;
-            const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i) || data.type === 'image';
-            
-            if (isImage) {
-              pCount++;
-              options.push({
-                quality: `High Res Photo ${pCount}`,
-                size: 'Auto', format: 'JPG', url: mUrl,
-                imageUrl: mUrl,
-                isImage: true, useProxy: true,
-              });
-            } else {
-              vCount++;
-              options.push({
-                quality: `HD Video ${vCount}`,
-                size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
-              });
-              options.push({
-                quality: `Audio Only ${vCount}`,
-                size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
-              });
-            }
+          const response = await fetch(`https://${ep.host}${ep.path}`, {
+            method: 'GET',
+            headers: {
+              'X-RapidAPI-Key': rapidApiKey,
+              'X-RapidAPI-Host': ep.host
+            },
+            signal: controller.signal,
           });
+          clearTimeout(timer);
           
-          if (options.length > 0) {
-            return {
-              success: true,
-              data: { type: options.every(o => o.isImage) ? 'image' : 'mixed', title: data.caption || 'Instagram Post/Reel', thumbnail: data.thumb || data.thumbnail || '', options },
-            };
+          if (!response.ok) continue;
+          const data = await response.json();
+          
+          if (data && (!data.error || (data.media && Array.isArray(data.media)) || data.download_url || data.video_url || data.url)) {
+            let vCount = 0;
+            let pCount = 0;
+            
+            const mediaUrls = [];
+            if (data.download_url) mediaUrls.push(data.download_url);
+            if (data.video_url) mediaUrls.push(data.video_url);
+            if (data.url && typeof data.url === 'string') mediaUrls.push(data.url);
+            if (data.media && Array.isArray(data.media)) mediaUrls.push(...data.media);
+            if (data.links && Array.isArray(data.links)) {
+              data.links.forEach(l => { if (l.url || l.link) mediaUrls.push(l.url || l.link); });
+            }
+            
+            mediaUrls.forEach((mUrl) => {
+              if (typeof mUrl !== 'string') return;
+              const isImage = mUrl.match(/\.(jpg|jpeg|png|webp)/i) || data.type === 'image';
+              
+              if (isImage) {
+                pCount++;
+                options.push({
+                  quality: `High Res Photo ${pCount}`,
+                  size: 'Auto', format: 'JPG', url: mUrl,
+                  imageUrl: mUrl,
+                  isImage: true, useProxy: true,
+                });
+              } else {
+                vCount++;
+                options.push({
+                  quality: `HD Video ${vCount}`,
+                  size: 'Auto', format: 'MP4', url: mUrl, useProxy: true,
+                });
+                options.push({
+                  quality: `Audio Only ${vCount}`,
+                  size: 'Auto', format: 'M4A', url: mUrl, isAudio: true, useProxy: true,
+                });
+              }
+            });
+            
+            if (options.length > 0) {
+              return {
+                success: true,
+                data: { type: options.every(o => o.isImage) ? 'image' : 'mixed', title: data.caption || data.title || 'Instagram Post/Reel', thumbnail: data.thumb || data.thumbnail || '', options },
+              };
+            }
           }
+        } catch (err) {
+          console.warn(`[Instagram] RapidAPI host ${ep.host} failed:`, err.message);
         }
-      } catch (err) {
-        console.error('[Instagram] RapidAPI failed:', err.message);
       }
     }
 
@@ -343,7 +360,7 @@ const extractInstagram = async (url, igCookies = null) => {
       };
     }
 
-    throw new Error('Could not extract media. If this is a private account or post, you MUST enter your Instagram Cookies in the App Settings to download it.');
+    throw new Error('Instagram blocked anonymous server requests for this media. Please add your Instagram Cookies in App Settings (Settings → Instagram Cookies) to download this post or reel.');
 
   } catch (error) {
     console.error('[Instagram Extractor] Error:', error.message);
