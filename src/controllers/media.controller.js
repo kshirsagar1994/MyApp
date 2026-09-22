@@ -1,9 +1,7 @@
-// GUARD: Each extractor is wrapped in try/catch so a single broken module
-// doesn't crash the entire server (e.g., if btch-downloader has a dep issue).
 let extractYouTube, extractInstagram, extractFacebook, extractSnapchat, extractLinkedIn;
-let extractTikTok, extractTwitter, extractPinterest, extractThreads;
+let extractTikTok, extractTwitter, extractPinterest, extractThreads, extractUniversal;
 
-try { ({ extractYouTube } = require('../extractors/youtube')); }
+try { ({ extractYouTube, extractUniversal } = require('../extractors/youtube')); }
 catch (e) { console.error('[Controller] Failed to load YouTube extractor:', e.message); }
 
 try { ({ extractInstagram } = require('../extractors/instagram')); }
@@ -42,7 +40,14 @@ const detectPlatform = (url) => {
   if (u.includes('twitter.com') || u.includes('x.com')) return 'twitter';
   if (u.includes('pinterest.com') || u.includes('pin.it')) return 'pinterest';
   if (u.includes('threads.net')) return 'threads';
-  return 'unknown';
+  if (u.includes('reddit.com') || u.includes('redd.it')) return 'reddit';
+  if (u.includes('vimeo.com')) return 'vimeo';
+  if (u.includes('twitch.tv')) return 'twitch';
+  if (u.includes('soundcloud.com')) return 'soundcloud';
+  if (u.includes('dailymotion.com') || u.includes('dai.ly')) return 'dailymotion';
+  if (u.includes('bilibili.com')) return 'bilibili';
+  if (u.includes('rumble.com')) return 'rumble';
+  return 'universal';
 };
 
 const analyzeUrl = async (req, res) => {
@@ -94,7 +99,12 @@ const analyzeUrl = async (req, res) => {
         result = await extractThreads(url, igCookies);
         break;
       default:
-        result = { success: false, error: `Unsupported platform. Supported: YouTube, Instagram, Facebook, Snapchat, LinkedIn, TikTok, Twitter, Pinterest, Threads.` };
+        // Universal Extractor for 1,800+ sites (Vimeo, Reddit, Twitch, SoundCloud, Dailymotion, Bilibili, etc.)
+        if (extractUniversal) {
+          result = await extractUniversal(url, igCookies);
+        } else {
+          result = { success: false, error: 'Universal extractor is unavailable.' };
+        }
     }
 
     if (!result.success) {

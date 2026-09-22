@@ -5,6 +5,13 @@ const fs = require('fs');
 
 const os = require('os');
 
+const formatDuration = (seconds) => {
+  if (!seconds || isNaN(seconds)) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+};
+
 /**
  * Async yt-dlp binary locator & installer.
  * On Windows, uses local yt-dlp.exe.
@@ -346,9 +353,73 @@ const extractYouTube = async (url, igCookies = null) => {
       });
     });
 
+    // Subtitles & Closed Captions (SRT/VTT)
+    const subtitles = info.subtitles || {};
+    const autoCaptions = info.automatic_captions || {};
+    const addedLangs = new Set();
+
+    // 1. Manual subtitles
+    Object.entries(subtitles).forEach(([lang, entries]) => {
+      if (addedLangs.has(lang)) return;
+      addedLangs.add(lang);
+      const srtEntry = Array.isArray(entries) ? (entries.find(e => e.ext === 'srt') || entries.find(e => e.ext === 'vtt') || entries[0]) : null;
+      const langName = srtEntry?.name || lang.toUpperCase();
+      options.push({
+        quality: `Subtitle — ${langName} (${lang})`,
+        size: 'SRT File',
+        format: 'SRT',
+        url: srtEntry?.url || '',
+        ytId: videoId,
+        subLang: lang,
+        isSubtitle: true,
+        useProxy: true,
+      });
+    });
+
+    // 2. Popular auto-generated captions
+    const popularAutoLangs = ['en', 'es', 'hi', 'fr', 'de', 'ja', 'pt', 'ar', 'ru', 'zh', 'it', 'ko'];
+    popularAutoLangs.forEach((lang) => {
+      if (addedLangs.has(lang)) return;
+      const entries = autoCaptions[lang];
+      if (!entries) return;
+      addedLangs.add(lang);
+      const srtEntry = Array.isArray(entries) ? (entries.find(e => e.ext === 'srt') || entries.find(e => e.ext === 'vtt') || entries[0]) : null;
+      const langName = srtEntry?.name || lang.toUpperCase();
+      options.push({
+        quality: `Auto Subtitle — ${langName} (${lang})`,
+        size: 'SRT File',
+        format: 'SRT',
+        url: srtEntry?.url || '',
+        ytId: videoId,
+        subLang: lang,
+        isSubtitle: true,
+        useProxy: true,
+      });
+    });
+
+    // Extract Chapters
+    const chapters = (info.chapters || []).map(ch => ({
+      title: ch.title,
+      startTime: ch.start_time,
+      endTime: ch.end_time,
+      startFormatted: formatDuration(Math.floor(ch.start_time || 0)),
+      endFormatted: formatDuration(Math.floor(ch.end_time || 0)),
+    }));
+
     if (options.length === 0) throw new Error('No formats found for this media.');
 
-    return { success: true, data: { type: 'video', title, thumbnail, options } };
+    return {
+      success: true,
+      data: {
+        type: 'video',
+        title,
+        thumbnail,
+        chapters: chapters.length > 0 ? chapters : undefined,
+        artist: info.artist || info.uploader || info.creator || '',
+        album: info.album || '',
+        options
+      }
+    };
   } catch (ytdlpError) {
     console.error('[YouTube Extractor] yt-dlp failed:', ytdlpError.message);
   }
@@ -514,5 +585,179 @@ const extractYouTube = async (url, igCookies = null) => {
   return { success: false, error: 'YouTube extraction failed. All methods exhausted.' };
 };
 
-module.exports = { extractYouTube, withTimeout, ytdlpGetInfoAsync, createTempCookieFile, ensureYtdlp };
+/**
+ * Universal Extractor for 1,800+ sites supported by yt-dlp (Vimeo, SoundCloud, Twitch, Reddit, Dailymotion, etc.)
+ */
+const extractUniversal = async (url, igCookies = null) => {
+  try {
+    console.log('[Universal Extractor] Extracting with yt-dlp:', url);
+    const info = await ytdlpGetInfoAsync(url, ['--no-playlist'], 50000, igCookies);
+
+    const title = info.title || 'Extracted Media';
+    const thumbnail = info.thumbnail || '';
+    const platform = (info.extractor || 'media').toLowerCase();
+    const options = [];
+
+    const formats = info.formats || [];
+    const videoFormats = formats.filter(fmt => fmt.vcodec !== 'none');
+    videoFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
+
+    const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none');
+    const bestAudio = audioFormats.find(f => f.ext === 'm4a') || audioFormats[0];
+    const bestAudioId = bestAudio ? bestAudio.format_id : 'bestaudio';
+
+    const uniqueHeights = [...new Set(videoFormats.map(f => f.height).filter(Boolean))];
+
+    uniqueHeights.forEach(h => {
+      const f = videoFormats.find(fmt => fmt.height === h && fmt.acodec !== 'none') ||
+                videoFormats.find(fmt => fmt.height === h);
+      if (f) {
+        const isMerged = f.acodec !== 'none';
+        const label = h >= 2160 ? '4K' : h >= 1440 ? '2K' : h >= 1080 ? 'Full HD' : h >= 720 ? 'HD' : h >= 480 ? 'SD' : `${h}p`;
+        options.push({
+          quality: `Video ${label} (${h}p)`,
+          size: f.filesize ? (f.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+          format: (f.ext || 'MP4').toUpperCase(),
+          url: f.url || '',
+          genericUrl: url,
+          itag: isMerged ? f.format_id : `${f.format_id}+${bestAudioId}`,
+          useProxy: true,
+        });
+      }
+    });
+
+    // Best fallback video
+    if (options.length === 0 && (info.url || formats.length > 0)) {
+      const bestFmt = formats[formats.length - 1];
+      options.push({
+        quality: 'Best Available Video',
+        size: 'Auto',
+        format: (bestFmt?.ext || 'MP4').toUpperCase(),
+        url: bestFmt?.url || info.url || '',
+        genericUrl: url,
+        itag: 'best',
+        useProxy: true,
+      });
+    }
+
+    // Audio options
+    audioFormats.forEach(af => {
+      const kbps = Math.round(af.abr || 128);
+      options.push({
+        quality: `Audio (${kbps}kbps)`,
+        size: af.filesize ? (af.filesize / 1024 / 1024).toFixed(1) + ' MB' : 'Auto',
+        format: (af.ext || 'MP3').toUpperCase(),
+        url: af.url || '',
+        genericUrl: url,
+        itag: af.format_id,
+        isAudio: true,
+        useProxy: true,
+      });
+    });
+
+    // Subtitles
+    const subtitles = info.subtitles || {};
+    const autoCaptions = info.automatic_captions || {};
+    const addedLangs = new Set();
+
+    Object.entries(subtitles).forEach(([lang, entries]) => {
+      if (addedLangs.has(lang)) return;
+      addedLangs.add(lang);
+      const srtEntry = Array.isArray(entries) ? (entries.find(e => e.ext === 'srt') || entries.find(e => e.ext === 'vtt') || entries[0]) : null;
+      options.push({
+        quality: `Subtitle — ${srtEntry?.name || lang.toUpperCase()} (${lang})`,
+        size: 'SRT File',
+        format: 'SRT',
+        url: srtEntry?.url || '',
+        genericUrl: url,
+        subLang: lang,
+        isSubtitle: true,
+        useProxy: true,
+      });
+    });
+
+    ['en', 'es', 'hi', 'fr', 'de', 'ja', 'pt', 'ar', 'ru', 'zh'].forEach(lang => {
+      if (addedLangs.has(lang) || !autoCaptions[lang]) return;
+      addedLangs.add(lang);
+      const entries = autoCaptions[lang];
+      const srtEntry = Array.isArray(entries) ? (entries.find(e => e.ext === 'srt') || entries.find(e => e.ext === 'vtt') || entries[0]) : null;
+      options.push({
+        quality: `Auto Subtitle — ${srtEntry?.name || lang.toUpperCase()} (${lang})`,
+        size: 'SRT File',
+        format: 'SRT',
+        url: srtEntry?.url || '',
+        genericUrl: url,
+        subLang: lang,
+        isSubtitle: true,
+        useProxy: true,
+      });
+    });
+
+    const chapters = (info.chapters || []).map(ch => ({
+      title: ch.title,
+      startTime: ch.start_time,
+      endTime: ch.end_time,
+      startFormatted: formatDuration(ch.start_time || 0),
+      endFormatted: formatDuration(ch.end_time || 0),
+    }));
+
+    if (options.length > 0) {
+      return {
+        success: true,
+        data: {
+          platform,
+          type: options.some(o => !o.isAudio && !o.isSubtitle) ? 'video' : 'audio',
+          title,
+          thumbnail,
+          chapters: chapters.length > 0 ? chapters : undefined,
+          artist: info.artist || info.uploader || info.creator || '',
+          album: info.album || '',
+          options
+        }
+      };
+    }
+  } catch (err) {
+    console.error('[Universal Extractor] yt-dlp failed:', err.message);
+  }
+
+  // Fallback: btch.aio()
+  try {
+    let btch;
+    try { btch = require('btch-downloader'); } catch { btch = null; }
+    if (btch && btch.aio) {
+      const aioRes = await withTimeout(btch.aio(url), 15000, 'Universal AIO');
+      if (aioRes && aioRes.data) {
+        const items = Array.isArray(aioRes.data) ? aioRes.data : [aioRes.data];
+        const options = [];
+        items.forEach(item => {
+          const mUrl = typeof item === 'string' ? item : (item.url || item.download_link);
+          if (!mUrl || typeof mUrl !== 'string' || !mUrl.startsWith('http')) return;
+          options.push({
+            quality: item.quality || 'HD Media',
+            size: 'Auto',
+            format: 'MP4',
+            url: mUrl,
+            useProxy: true,
+          });
+        });
+        if (options.length > 0) {
+          return {
+            success: true,
+            data: {
+              platform: 'generic',
+              type: 'video',
+              title: aioRes.title || 'Media',
+              thumbnail: aioRes.thumbnail || '',
+              options
+            }
+          };
+        }
+      }
+    }
+  } catch {}
+
+  return { success: false, error: 'Universal media extraction failed. All methods exhausted.' };
+};
+
+module.exports = { extractYouTube, extractUniversal, withTimeout, ytdlpGetInfoAsync, createTempCookieFile, ensureYtdlp, formatDuration };
 

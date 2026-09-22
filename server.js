@@ -211,7 +211,7 @@ async function handleYouTubePlaylist(url, res) {
 
 // ===================== LEGACY DOWNLOAD / PROXY ENDPOINT =====================
 app.get('/api/media/download', async (req, res) => {
-  const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igCookies } = req.query;
+  const { url: mediaUrl, filename, ytId, itag, playlistUrl, playlistFormat, genericUrl, igCookies, subLang } = req.query;
   if (!mediaUrl && !ytId && !playlistUrl && !genericUrl) {
     return res.status(400).json({ error: 'url, ytId, playlistUrl, or genericUrl param required' });
   }
@@ -219,6 +219,55 @@ app.get('/api/media/download', async (req, res) => {
   const safeName = (filename || 'download').toString().replace(/[^a-zA-Z0-9._-]/g, '_');
 
   try {
+    // ─── Subtitle download ───
+    if (subLang || safeName.endsWith('.srt') || safeName.endsWith('.vtt')) {
+      const targetLang = subLang || 'en';
+      const targetYtId = ytId || genericUrl;
+      if (mediaUrl && mediaUrl.startsWith('http') && !mediaUrl.includes('google') && !mediaUrl.includes('youtube')) {
+        try {
+          const subRes = await fetch(mediaUrl);
+          const subText = await subRes.text();
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+          return res.send(subText);
+        } catch (e) {
+          console.error('[Download] Direct subtitle fetch error:', e.message);
+        }
+      }
+      if (targetYtId) {
+        const ytdlpPath = await getYtdlpPath();
+        const subUrl = targetYtId.startsWith('http') ? targetYtId : `https://www.youtube.com/watch?v=${targetYtId}`;
+        const tempBase = path.join(os.tmpdir(), `sub_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
+        const args = [
+          '--write-subs',
+          '--write-auto-subs',
+          '--sub-lang', targetLang,
+          '--convert-subs', 'srt',
+          '--skip-download',
+          '--no-warnings',
+          '--js-runtimes', 'node',
+          '-o', `${tempBase}.%(ext)s`,
+          subUrl
+        ];
+        const subProc = spawn(ytdlpPath, args, { windowsHide: true });
+        subProc.on('close', () => {
+          try {
+            const files = fs.readdirSync(os.tmpdir()).filter(f => f.startsWith(path.basename(tempBase)) && (f.endsWith('.srt') || f.endsWith('.vtt')));
+            if (files.length > 0) {
+              const foundFile = path.join(os.tmpdir(), files[0]);
+              const content = fs.readFileSync(foundFile, 'utf-8');
+              try { fs.unlinkSync(foundFile); } catch {}
+              res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+              res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+              return res.send(content);
+            }
+          } catch {}
+          if (!res.headersSent) res.status(404).json({ error: 'Subtitle not found for this language.' });
+        });
+        return;
+      }
+    }
+
     // ─── YouTube Playlist download ───
     if (playlistUrl) {
       return handlePlaylistDownload(playlistUrl, playlistFormat, safeName, req, res);
@@ -265,6 +314,14 @@ app.get('/api/media/download', async (req, res) => {
           '--js-runtimes', 'node',
           '-o', tempFile
         ];
+
+        // Embed ID3 metadata tags (Title, Artist, Album) and Cover Artwork
+        if (isFfmpegAvailable()) {
+          args.push('--embed-metadata');
+          if (isAudio) {
+            args.push('--embed-thumbnail');
+          }
+        }
 
         if (needsMerge) {
           args.push('--merge-output-format', 'mp4');

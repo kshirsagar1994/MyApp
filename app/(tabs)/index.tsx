@@ -36,6 +36,10 @@ const MediaOptionItem = React.memo(({ opt, index, isDark, themeColors, onDownloa
             {opt.playlistFormat === 'audio' ? '🎵 Download All' : '🎥 Download All'}
           </Text>
         </TouchableOpacity>
+      ) : (opt.isSubtitle || opt.format === 'SRT') ? (
+        <TouchableOpacity style={[styles.dualBtn, { backgroundColor: '#F59E0B' }]} onPress={() => onDownload(opt)}>
+          <Text style={styles.dualBtnText}>💬 Download</Text>
+        </TouchableOpacity>
       ) : opt.isImage ? (
         <TouchableOpacity style={[styles.dualBtn, { backgroundColor: '#3B82F6' }]} onPress={() => onDownload(opt, 'image')}>
           <Text style={styles.dualBtnText}>🖼️ Download</Text>
@@ -92,7 +96,7 @@ export default function HomeScreen() {
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [activeDownloads, setActiveDownloads] = useState<any[]>([]);
-  const [activeCategoryTab, setActiveCategoryTab] = useState<'all' | 'video' | 'audio' | 'image'>('all');
+  const [activeCategoryTab, setActiveCategoryTab] = useState<'all' | 'video' | 'audio' | 'subtitle' | 'image'>('all');
   
   // YouTube download modal state
   const [showDownloadModal, setShowDownloadModal] = useState(false);
@@ -115,10 +119,13 @@ export default function HomeScreen() {
   const filteredOptions = useMemo(() => {
     if (!result || !result.options) return [];
     if (activeCategoryTab === 'video') {
-      return result.options.filter((o: any) => !o.isAudio && !o.isImage && o.format !== 'MP3' && o.format !== 'M4A' && !o.quality?.toLowerCase().includes('photo'));
+      return result.options.filter((o: any) => !o.isAudio && !o.isImage && !o.isSubtitle && o.format !== 'MP3' && o.format !== 'M4A' && o.format !== 'SRT' && !o.quality?.toLowerCase().includes('photo') && !o.quality?.toLowerCase().includes('subtitle'));
     }
     if (activeCategoryTab === 'audio') {
-      return result.options.filter((o: any) => o.isAudio || o.format === 'MP3' || o.format === 'M4A' || o.quality?.toLowerCase().includes('audio'));
+      return result.options.filter((o: any) => (o.isAudio || o.format === 'MP3' || o.format === 'M4A' || o.quality?.toLowerCase().includes('audio')) && !o.isSubtitle && o.format !== 'SRT');
+    }
+    if (activeCategoryTab === 'subtitle') {
+      return result.options.filter((o: any) => o.isSubtitle || o.format === 'SRT' || o.quality?.toLowerCase().includes('subtitle'));
     }
     if (activeCategoryTab === 'image') {
       return result.options.filter((o: any) => o.isImage || o.format === 'JPG' || o.format === 'PNG' || o.format === 'WEBP' || o.quality?.toLowerCase().includes('photo'));
@@ -180,11 +187,11 @@ export default function HomeScreen() {
 
     // Determine file extension
     let finalExt = '.mp4';
-    // We force audio to save as .mp4 because Expo MediaLibrary on Android strictly 
-    // rejects .m4a/.mp3 files when saving to generic albums like DCIM.
-    // It will play perfectly as an audio-only video.
     const isAudioOption = opt.isAudio || opt.format === 'MP3' || opt.format === 'M4A' || opt.quality?.toLowerCase().includes('audio');
-    if (typeOverride === 'image' || opt.isImage || opt.quality?.toLowerCase().includes('photo')) {
+    const isSubOption = opt.isSubtitle || opt.format === 'SRT' || opt.quality?.toLowerCase().includes('subtitle');
+    if (isSubOption) {
+      finalExt = '.srt';
+    } else if (typeOverride === 'image' || opt.isImage || opt.quality?.toLowerCase().includes('photo')) {
       finalExt = '.jpg';
     } else {
       finalExt = '.mp4'; 
@@ -218,13 +225,14 @@ export default function HomeScreen() {
     const proxyParams = new URLSearchParams({ filename: fileName });
     if (opt.ytId) proxyParams.set('ytId', opt.ytId);
     if (opt.itag) proxyParams.set('itag', String(opt.itag));
+    if (opt.subLang) proxyParams.set('subLang', opt.subLang);
     if (opt.playlistUrl) proxyParams.set('playlistUrl', opt.playlistUrl);
     if (opt.playlistFormat) proxyParams.set('playlistFormat', opt.playlistFormat);
     if (opt.genericUrl) proxyParams.set('genericUrl', opt.genericUrl);
     if (directUrl) proxyParams.set('url', directUrl);
     if (opt.igCookies) proxyParams.set('igCookies', opt.igCookies);
     
-    const shouldUseProxy = opt.useProxy || Platform.OS === 'web';
+    const shouldUseProxy = opt.useProxy || Platform.OS === 'web' || isSubOption;
     let finalDownloadUrl = shouldUseProxy ? '' : directUrl; // If direct, we use directUrl
 
     // ===== QUEUE & NATIVE DOWNLOAD LOGIC =====
@@ -243,6 +251,7 @@ export default function HomeScreen() {
         if (fileName) params.append('filename', fileName);
         if (opt.ytId) params.append('ytId', opt.ytId);
         if (opt.itag) params.append('itag', opt.itag);
+        if (opt.subLang) params.append('subLang', opt.subLang);
         if (opt.playlistUrl) params.append('playlistUrl', opt.playlistUrl);
         if (opt.playlistFormat) params.append('playlistFormat', opt.playlistFormat);
         if (opt.genericUrl) params.append('genericUrl', opt.genericUrl);
@@ -409,7 +418,12 @@ export default function HomeScreen() {
     if (urlLower.includes('twitter.com') || urlLower.includes('x.com')) return { name: 'logo-twitter' as any, color: '#1DA1F2', platform: 'twitter' };
     if (urlLower.includes('pinterest.com') || urlLower.includes('pin.it')) return { name: 'logo-pinterest' as any, color: '#E60023', platform: 'pinterest' };
     if (urlLower.includes('threads.net')) return { name: 'at-circle-outline' as any, color: '#000000', platform: 'threads' };
-    return { name: 'link' as any, color: '#4A5568', platform: 'generic' };
+    if (urlLower.includes('reddit.com') || urlLower.includes('redd.it')) return { name: 'logo-reddit' as any, color: '#FF4500', platform: 'reddit' };
+    if (urlLower.includes('twitch.tv')) return { name: 'logo-twitch' as any, color: '#9146FF', platform: 'twitch' };
+    if (urlLower.includes('soundcloud.com')) return { name: 'musical-notes' as any, color: '#FF5500', platform: 'soundcloud' };
+    if (urlLower.includes('vimeo.com')) return { name: 'logo-vimeo' as any, color: '#1AB7EA', platform: 'vimeo' };
+    if (urlLower.includes('dailymotion.com') || urlLower.includes('dai.ly')) return { name: 'videocam' as any, color: '#0066DC', platform: 'dailymotion' };
+    return { name: 'globe-outline' as any, color: '#10B981', platform: 'universal' };
   }, [url]);
 
   const handleAnalyze = useCallback(async () => {
@@ -585,14 +599,32 @@ export default function HomeScreen() {
               )}
               <View style={styles.resultTitleBox}>
                 <Text style={[styles.resultHeader, { color: themeColors.text }]}>{result.title || 'Extracted Media'}</Text>
-                <Text style={styles.platformBadge}>{result.platform?.toUpperCase()}</Text>
-                {result.type === 'playlist' && (
-                  <Text style={[styles.playlistBadge]}>📋 PLAYLIST</Text>
-                )}
+                <View style={styles.badgeRow}>
+                  <Text style={styles.platformBadge}>{result.platform?.toUpperCase()}</Text>
+                  {result.artist ? <Text style={styles.artistBadge}>👤 {result.artist}</Text> : null}
+                  {result.type === 'playlist' && (
+                    <Text style={[styles.playlistBadge]}>📋 PLAYLIST</Text>
+                  )}
+                </View>
               </View>
             </View>
 
-            {/* Category Filter Pills (All, Videos, Audio, Photos) */}
+            {/* Video Chapters Section */}
+            {result.chapters && result.chapters.length > 0 && (
+              <View style={[styles.chaptersBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)' }]}>
+                <Text style={[styles.chaptersTitle, { color: themeColors.text }]}>📑 Video Chapters ({result.chapters.length})</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chaptersScroll}>
+                  {result.chapters.map((ch: any, cIdx: number) => (
+                    <View key={cIdx} style={[styles.chapterPill, { backgroundColor: isDark ? '#1F2937' : '#E5E7EB' }]}>
+                      <Text style={styles.chapterTime}>{ch.startFormatted}</Text>
+                      <Text style={[styles.chapterText, { color: themeColors.text }]} numberOfLines={1}>{ch.title}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Category Filter Pills (All, Videos, Audio, Subtitles, Photos) */}
             {result.options.length > 1 && (
               <View style={[styles.categoryFilterRow, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' }]}>
                 <TouchableOpacity
@@ -603,7 +635,7 @@ export default function HomeScreen() {
                     All ({result.options.length})
                   </Text>
                 </TouchableOpacity>
-                {result.options.some((o: any) => !o.isAudio && !o.isImage && o.format !== 'MP3' && o.format !== 'M4A' && !o.quality?.toLowerCase().includes('photo')) && (
+                {result.options.some((o: any) => !o.isAudio && !o.isImage && !o.isSubtitle && o.format !== 'MP3' && o.format !== 'M4A' && o.format !== 'SRT' && !o.quality?.toLowerCase().includes('photo') && !o.quality?.toLowerCase().includes('subtitle')) && (
                   <TouchableOpacity
                     style={[styles.categoryFilterPill, activeCategoryTab === 'video' && styles.categoryFilterPillActiveVideo]}
                     onPress={() => setActiveCategoryTab('video')}
@@ -613,13 +645,23 @@ export default function HomeScreen() {
                     </Text>
                   </TouchableOpacity>
                 )}
-                {result.options.some((o: any) => o.isAudio || o.format === 'MP3' || o.format === 'M4A' || o.quality?.toLowerCase().includes('audio')) && (
+                {result.options.some((o: any) => (o.isAudio || o.format === 'MP3' || o.format === 'M4A' || o.quality?.toLowerCase().includes('audio')) && !o.isSubtitle && o.format !== 'SRT') && (
                   <TouchableOpacity
                     style={[styles.categoryFilterPill, activeCategoryTab === 'audio' && styles.categoryFilterPillActiveAudio]}
                     onPress={() => setActiveCategoryTab('audio')}
                   >
                     <Text style={[styles.categoryFilterText, activeCategoryTab === 'audio' && styles.categoryFilterTextActive]}>
                       🎵 Audio
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {result.options.some((o: any) => o.isSubtitle || o.format === 'SRT' || o.quality?.toLowerCase().includes('subtitle')) && (
+                  <TouchableOpacity
+                    style={[styles.categoryFilterPill, activeCategoryTab === 'subtitle' && styles.categoryFilterPillActiveSubtitle]}
+                    onPress={() => setActiveCategoryTab('subtitle')}
+                  >
+                    <Text style={[styles.categoryFilterText, activeCategoryTab === 'subtitle' && styles.categoryFilterTextActive]}>
+                      💬 Subtitles
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -1076,6 +1118,9 @@ const styles = StyleSheet.create({
   categoryFilterPillActiveAudio: {
     backgroundColor: '#8B5CF6',
   },
+  categoryFilterPillActiveSubtitle: {
+    backgroundColor: '#F59E0B',
+  },
   categoryFilterPillActiveImage: {
     backgroundColor: '#EC4899',
   },
@@ -1086,5 +1131,51 @@ const styles = StyleSheet.create({
   },
   categoryFilterTextActive: {
     color: '#FFFFFF',
+  },
+
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  artistBadge: {
+    fontSize: 11,
+    color: '#94A3B8',
+    fontWeight: '600',
+  },
+
+  chaptersBox: {
+    padding: 12,
+    borderRadius: 14,
+    marginVertical: 10,
+  },
+  chaptersTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  chaptersScroll: {
+    flexDirection: 'row',
+  },
+  chapterPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginRight: 8,
+    maxWidth: 200,
+    gap: 6,
+  },
+  chapterTime: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#3B82F6',
+  },
+  chapterText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
 });
