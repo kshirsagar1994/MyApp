@@ -18,16 +18,16 @@ export const AD_UNIT_IDS = {
 let rewardedAdInstance: RewardedAd | null = null;
 let isRewardedAdLoaded = false;
 let isLoadingRewardedAd = false;
-let rewardedAdUnsubscribers: (() => void)[] = [];
+let rewardedAdUnsubscribeFunctions: (() => void)[] = [];
 
 /**
  * Clean up existing rewarded ad listeners
  */
 function cleanupRewardedListeners() {
-  rewardedAdUnsubscribers.forEach(unsub => {
-    try { unsub(); } catch {}
+  rewardedAdUnsubscribeFunctions.forEach(unsubscribe => {
+    try { unsubscribe(); } catch {}
   });
-  rewardedAdUnsubscribers = [];
+  rewardedAdUnsubscribeFunctions = [];
 }
 
 /**
@@ -45,18 +45,18 @@ export function preloadRewardedAd() {
       requestNonPersonalizedAdsOnly: false,
     });
 
-    const unsubLoaded = rewardedAdInstance.addAdEventListener(RewardedAdEventType.LOADED, () => {
+    const unsubscribeLoaded = rewardedAdInstance.addAdEventListener(RewardedAdEventType.LOADED, () => {
       isRewardedAdLoaded = true;
       isLoadingRewardedAd = false;
     });
 
-    const unsubError = rewardedAdInstance.addAdEventListener(AdEventType.ERROR, (error) => {
+    const unsubscribeError = rewardedAdInstance.addAdEventListener(AdEventType.ERROR, (error) => {
       isRewardedAdLoaded = false;
       isLoadingRewardedAd = false;
       console.warn('AdMob Rewarded Ad load error:', error);
     });
 
-    rewardedAdUnsubscribers.push(unsubLoaded, unsubError);
+    rewardedAdUnsubscribeFunctions.push(unsubscribeLoaded, unsubscribeError);
     rewardedAdInstance.load();
   } catch (err) {
     isLoadingRewardedAd = false;
@@ -92,22 +92,22 @@ export async function showRewardedAdForDownload(onProceed: () => void) {
   try {
     cleanupRewardedListeners();
 
-    const unsubEarned = rewardedAdInstance.addAdEventListener(
+    const unsubscribeEarned = rewardedAdInstance.addAdEventListener(
       RewardedAdEventType.EARNED_REWARD,
       () => {
         proceedOnce();
       }
     );
 
-    const unsubClosed = rewardedAdInstance.addAdEventListener(AdEventType.CLOSED, () => {
+    const unsubscribeClosed = rewardedAdInstance.addAdEventListener(AdEventType.CLOSED, () => {
       proceedOnce();
     });
 
-    const unsubError = rewardedAdInstance.addAdEventListener(AdEventType.ERROR, () => {
+    const unsubscribeError = rewardedAdInstance.addAdEventListener(AdEventType.ERROR, () => {
       proceedOnce();
     });
 
-    rewardedAdUnsubscribers.push(unsubEarned, unsubClosed, unsubError);
+    rewardedAdUnsubscribeFunctions.push(unsubscribeEarned, unsubscribeClosed, unsubscribeError);
     await rewardedAdInstance.show();
   } catch (e) {
     console.warn('Error displaying Rewarded Ad:', e);
