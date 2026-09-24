@@ -16,6 +16,8 @@ export default function RootLayout() {
 
   useEffect(() => {
     initializeAdMob();
+    // Guarantee splash screen hides cleanly
+    SplashScreen.hideAsync().catch(() => {});
   }, []);
 
   const onLayoutRootView = useCallback(() => {

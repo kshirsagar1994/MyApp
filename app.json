@@ -61,15 +61,12 @@
           "androidAppId": "ca-app-pub-7506421101876458~8932553901",
           "iosAppId": "ca-app-pub-7506421101876458~8932553901"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     }
-  },
-  "react-native-google-mobile-ads": {
-    "android_app_id": "ca-app-pub-7506421101876458~8932553901",
-    "ios_app_id": "ca-app-pub-7506421101876458~8932553901"
   }
 }
