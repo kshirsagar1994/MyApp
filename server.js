@@ -113,6 +113,10 @@ app.get('/', (_req, res) => {
   res.json({ status: 'alive', message: 'Backend is running', supportedPlatforms: ['youtube', 'instagram', 'facebook', 'linkedin', 'snapchat', 'tiktok', 'twitter', 'pinterest', 'threads'] });
 });
 
+app.get('/app-ads.txt', (_req, res) => {
+  res.type('text/plain').send('google.com, pub-7506421101876458, DIRECT, f08c47fec0942fa0\n');
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', message: 'Backend is healthy', timestamp: new Date().toISOString() });
 });

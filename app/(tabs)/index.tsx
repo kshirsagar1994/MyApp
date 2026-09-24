@@ -9,6 +9,7 @@ import { documentDirectory, createDownloadResumable, readAsStringAsync, deleteAs
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import Animated, { FadeInDown } from 'react-native-reanimated';
+import { showRewardedAdForDownload } from '@/src/services/admob';
 
 // ── PERFORMANCE: Memoized media option item — prevents all options from
 // re-rendering when download progress triggers activeDownloads state change
@@ -185,182 +186,185 @@ export default function HomeScreen() {
       return;
     }
 
-    // Determine file extension
-    let finalExt = '.mp4';
-    const isAudioOption = opt.isAudio || opt.format === 'MP3' || opt.format === 'M4A' || opt.quality?.toLowerCase().includes('audio');
-    const isSubOption = opt.isSubtitle || opt.format === 'SRT' || opt.quality?.toLowerCase().includes('subtitle');
-    if (isSubOption) {
-      finalExt = '.srt';
-    } else if (typeOverride === 'image' || opt.isImage || opt.quality?.toLowerCase().includes('photo')) {
-      finalExt = '.jpg';
-    } else {
-      finalExt = '.mp4'; 
-    }
-
-    // Clean filename (preserve spaces, remove only invalid filename characters)
-    let baseName = opt.title || result?.title || 'Media';
-    if (opt.quality && /^\d+\.\s/.test(opt.quality) && !opt.quality.includes('Entire Playlist')) {
-       // If it's a playlist item, the title is inside opt.quality as "1. Title"
-       baseName = opt.quality.replace(/^\d+\.\s*/, '');
-    }
-    
-    let cleanTitle = baseName.replace(/[/\\?%*:|"<>#]/g, '-').trim();
-    if (cleanTitle.length > 50) cleanTitle = cleanTitle.substring(0, 50).trim();
-    if (!cleanTitle) cleanTitle = 'Media';
-    
-    // Use the exact title without a random suffix as requested
-    const fileName = `${cleanTitle}${finalExt}`;
-
-    const newDownload = {
-      id: Date.now().toString(),
-      title: opt.quality?.substring(0, 50) || fileName,
-      progress: 0,
-      speed: 'Starting...',
-      isPaused: false,
-    };
-    setActiveDownloads(prev => [...prev, newDownload]);
-
-    // Build proxy URL parameters
-    const baseUrl = getServerBaseUrl();
-    const proxyParams = new URLSearchParams({ filename: fileName });
-    if (opt.ytId) proxyParams.set('ytId', opt.ytId);
-    if (opt.itag) proxyParams.set('itag', String(opt.itag));
-    if (opt.subLang) proxyParams.set('subLang', opt.subLang);
-    if (opt.playlistUrl) proxyParams.set('playlistUrl', opt.playlistUrl);
-    if (opt.playlistFormat) proxyParams.set('playlistFormat', opt.playlistFormat);
-    if (opt.genericUrl) proxyParams.set('genericUrl', opt.genericUrl);
-    if (directUrl) proxyParams.set('url', directUrl);
-    if (opt.igCookies) proxyParams.set('igCookies', opt.igCookies);
-    
-    const shouldUseProxy = opt.useProxy || Platform.OS === 'web' || isSubOption;
-    let finalDownloadUrl = shouldUseProxy ? '' : directUrl; // If direct, we use directUrl
-
-    // ===== QUEUE & NATIVE DOWNLOAD LOGIC =====
-    const fileUri = (documentDirectory || '') + fileName;
-    const downloadHeaders: any = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-    };
-    if (!shouldUseProxy && (directUrl?.includes('instagram.com') || directUrl?.includes('fbcdn.net'))) {
-      downloadHeaders['Referer'] = 'https://www.instagram.com/';
-    }
-
-    try {
-      if (shouldUseProxy) {
-        // Use direct proxy download instead of queue
-        const params = new URLSearchParams();
-        if (fileName) params.append('filename', fileName);
-        if (opt.ytId) params.append('ytId', opt.ytId);
-        if (opt.itag) params.append('itag', opt.itag);
-        if (opt.subLang) params.append('subLang', opt.subLang);
-        if (opt.playlistUrl) params.append('playlistUrl', opt.playlistUrl);
-        if (opt.playlistFormat) params.append('playlistFormat', opt.playlistFormat);
-        if (opt.genericUrl) params.append('genericUrl', opt.genericUrl);
-        if (directUrl) params.append('url', directUrl);
-        if (opt.igCookies) params.append('igCookies', opt.igCookies);
-
-        finalDownloadUrl = `${baseUrl}/api/media/download?${params.toString()}`;
-      }
-
-      // 3. Perform final local download
-      if (Platform.OS === 'web') {
-          // Fallback web fetch handling for queued final URL
-          const res = await fetch(finalDownloadUrl);
-          const blob = await res.blob();
-          const blobUrl = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = blobUrl;
-          a.download = fileName;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(blobUrl);
-          
-          setActiveDownloads(prev => prev.map(d => d.id === newDownload.id ? { ...d, progress: 100, speed: 'Complete' } : d));
-          setTimeout(() => { setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id)); }, 1500);
-          return;
-      }
-
-      const downloadProgressCallback = (downloadProgress: any) => {
-        const total = downloadProgress.totalBytesExpectedToWrite;
-        const written = downloadProgress.totalBytesWritten;
-        if (total > 0) {
-          const percent = Math.min(Math.max(Math.round((written / total) * 100), 1), 100);
-          const writtenMB = (written / (1024 * 1024)).toFixed(1);
-          const totalMB = (total / (1024 * 1024)).toFixed(1);
-          setActiveDownloads(prev => prev.map(d => 
-            d.id === newDownload.id ? { ...d, progress: percent, speed: `${percent}% • ${writtenMB} MB / ${totalMB} MB` } : d
-          ));
-        } else {
-          const writtenMB = (written / (1024 * 1024)).toFixed(1);
-          setActiveDownloads(prev => prev.map(d => 
-            d.id === newDownload.id ? { ...d, progress: -1, speed: `Downloading • ${writtenMB} MB` } : d
-          ));
-        }
-      };
-
-      const downloadResumable = createDownloadResumable(
-        finalDownloadUrl,
-        fileUri,
-        { headers: downloadHeaders },
-        downloadProgressCallback
-      );
-      
-      downloadTasks.current[newDownload.id] = downloadResumable;
-      const downloadResult = await downloadResumable.downloadAsync();
-      
-      if (!downloadTasks.current[newDownload.id]) return; // Cancelled
-      delete downloadTasks.current[newDownload.id];
-      setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
-      
-      if (downloadResult && downloadResult.status === 200 && downloadResult.uri) {
-        // Save to gallery and file manager
-        await saveToGalleryAndStorage(downloadResult.uri, fileName, finalExt);
-
-        // Save to internal app download history (bounded to 200 items)
-        try {
-          const data = await AsyncStorage.getItem('downloads');
-          const existing = data ? JSON.parse(data) : [];
-          const completed = {
-            id: newDownload.id,
-            title: fileName,
-            status: 'completed',
-            type: finalExt === '.jpg' ? 'image' : isAudioOption ? 'music' : 'video',
-            size: opt.size || 'HQ',
-            uri: downloadResult.uri,
-          };
-          const bounded = [completed, ...existing].slice(0, 200);
-          await AsyncStorage.setItem('downloads', JSON.stringify(bounded));
-        } catch (err) {
-          console.log('Storage Error', err);
-        }
+    // Show Rewarded Ad when user clicks Download
+    showRewardedAdForDownload(async () => {
+      // Determine file extension
+      let finalExt = '.mp4';
+      const isAudioOption = opt.isAudio || opt.format === 'MP3' || opt.format === 'M4A' || opt.quality?.toLowerCase().includes('audio');
+      const isSubOption = opt.isSubtitle || opt.format === 'SRT' || opt.quality?.toLowerCase().includes('subtitle');
+      if (isSubOption) {
+        finalExt = '.srt';
+      } else if (typeOverride === 'image' || opt.isImage || opt.quality?.toLowerCase().includes('photo')) {
+        finalExt = '.jpg';
       } else {
-        let serverErrorMsg = '';
-        try {
-          if (downloadResult && downloadResult.uri) {
-            const errorBody = await readAsStringAsync(downloadResult.uri);
-            try {
-              const parsed = JSON.parse(errorBody);
-              serverErrorMsg = parsed.error || parsed.message || errorBody;
-            } catch {
-              serverErrorMsg = errorBody.slice(0, 120);
-            }
-            await deleteAsync(downloadResult.uri, { idempotent: true });
-          }
-        } catch {}
-
-        Alert.alert(
-          'Download Failed ❌',
-          serverErrorMsg ? `Server error: ${serverErrorMsg}` : `Server returned status: ${downloadResult?.status || 'Unknown'}`
-        );
+        finalExt = '.mp4'; 
       }
-    } catch (e: any) {
-      console.error(e);
-      if (downloadTasks.current[newDownload.id]) {
-        Alert.alert('Download Failed ❌', e.message || 'Unknown error');
+
+      // Clean filename (preserve spaces, remove only invalid filename characters)
+      let baseName = opt.title || result?.title || 'Media';
+      if (opt.quality && /^\d+\.\s/.test(opt.quality) && !opt.quality.includes('Entire Playlist')) {
+         // If it's a playlist item, the title is inside opt.quality as "1. Title"
+         baseName = opt.quality.replace(/^\d+\.\s*/, '');
+      }
+      
+      let cleanTitle = baseName.replace(/[/\\?%*:|"<>#]/g, '-').trim();
+      if (cleanTitle.length > 50) cleanTitle = cleanTitle.substring(0, 50).trim();
+      if (!cleanTitle) cleanTitle = 'Media';
+      
+      // Use the exact title without a random suffix as requested
+      const fileName = `${cleanTitle}${finalExt}`;
+
+      const newDownload = {
+        id: Date.now().toString(),
+        title: opt.quality?.substring(0, 50) || fileName,
+        progress: 0,
+        speed: 'Starting...',
+        isPaused: false,
+      };
+      setActiveDownloads(prev => [...prev, newDownload]);
+
+      // Build proxy URL parameters
+      const baseUrl = getServerBaseUrl();
+      const proxyParams = new URLSearchParams({ filename: fileName });
+      if (opt.ytId) proxyParams.set('ytId', opt.ytId);
+      if (opt.itag) proxyParams.set('itag', String(opt.itag));
+      if (opt.subLang) proxyParams.set('subLang', opt.subLang);
+      if (opt.playlistUrl) proxyParams.set('playlistUrl', opt.playlistUrl);
+      if (opt.playlistFormat) proxyParams.set('playlistFormat', opt.playlistFormat);
+      if (opt.genericUrl) proxyParams.set('genericUrl', opt.genericUrl);
+      if (directUrl) proxyParams.set('url', directUrl);
+      if (opt.igCookies) proxyParams.set('igCookies', opt.igCookies);
+      
+      const shouldUseProxy = opt.useProxy || Platform.OS === 'web' || isSubOption;
+      let finalDownloadUrl = shouldUseProxy ? '' : directUrl; // If direct, we use directUrl
+
+      // ===== QUEUE & NATIVE DOWNLOAD LOGIC =====
+      const fileUri = (documentDirectory || '') + fileName;
+      const downloadHeaders: any = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+      };
+      if (!shouldUseProxy && (directUrl?.includes('instagram.com') || directUrl?.includes('fbcdn.net'))) {
+        downloadHeaders['Referer'] = 'https://www.instagram.com/';
+      }
+
+      try {
+        if (shouldUseProxy) {
+          // Use direct proxy download instead of queue
+          const params = new URLSearchParams();
+          if (fileName) params.append('filename', fileName);
+          if (opt.ytId) params.append('ytId', opt.ytId);
+          if (opt.itag) params.append('itag', opt.itag);
+          if (opt.subLang) params.append('subLang', opt.subLang);
+          if (opt.playlistUrl) params.append('playlistUrl', opt.playlistUrl);
+          if (opt.playlistFormat) params.append('playlistFormat', opt.playlistFormat);
+          if (opt.genericUrl) params.append('genericUrl', opt.genericUrl);
+          if (directUrl) params.append('url', directUrl);
+          if (opt.igCookies) params.append('igCookies', opt.igCookies);
+
+          finalDownloadUrl = `${baseUrl}/api/media/download?${params.toString()}`;
+        }
+
+        // 3. Perform final local download
+        if (Platform.OS === 'web') {
+            // Fallback web fetch handling for queued final URL
+            const res = await fetch(finalDownloadUrl);
+            const blob = await res.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+            
+            setActiveDownloads(prev => prev.map(d => d.id === newDownload.id ? { ...d, progress: 100, speed: 'Complete' } : d));
+            setTimeout(() => { setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id)); }, 1500);
+            return;
+        }
+
+        const downloadProgressCallback = (downloadProgress: any) => {
+          const total = downloadProgress.totalBytesExpectedToWrite;
+          const written = downloadProgress.totalBytesWritten;
+          if (total > 0) {
+            const percent = Math.min(Math.max(Math.round((written / total) * 100), 1), 100);
+            const writtenMB = (written / (1024 * 1024)).toFixed(1);
+            const totalMB = (total / (1024 * 1024)).toFixed(1);
+            setActiveDownloads(prev => prev.map(d => 
+              d.id === newDownload.id ? { ...d, progress: percent, speed: `${percent}% • ${writtenMB} MB / ${totalMB} MB` } : d
+            ));
+          } else {
+            const writtenMB = (written / (1024 * 1024)).toFixed(1);
+            setActiveDownloads(prev => prev.map(d => 
+              d.id === newDownload.id ? { ...d, progress: -1, speed: `Downloading • ${writtenMB} MB` } : d
+            ));
+          }
+        };
+
+        const downloadResumable = createDownloadResumable(
+          finalDownloadUrl,
+          fileUri,
+          { headers: downloadHeaders },
+          downloadProgressCallback
+        );
+        
+        downloadTasks.current[newDownload.id] = downloadResumable;
+        const downloadResult = await downloadResumable.downloadAsync();
+        
+        if (!downloadTasks.current[newDownload.id]) return; // Cancelled
         delete downloadTasks.current[newDownload.id];
         setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
+        
+        if (downloadResult && downloadResult.status === 200 && downloadResult.uri) {
+          // Save to gallery and file manager
+          await saveToGalleryAndStorage(downloadResult.uri, fileName, finalExt);
+
+          // Save to internal app download history (bounded to 200 items)
+          try {
+            const data = await AsyncStorage.getItem('downloads');
+            const existing = data ? JSON.parse(data) : [];
+            const completed = {
+              id: newDownload.id,
+              title: fileName,
+              status: 'completed',
+              type: finalExt === '.jpg' ? 'image' : isAudioOption ? 'music' : 'video',
+              size: opt.size || 'HQ',
+              uri: downloadResult.uri,
+            };
+            const bounded = [completed, ...existing].slice(0, 200);
+            await AsyncStorage.setItem('downloads', JSON.stringify(bounded));
+          } catch (err) {
+            console.log('Storage Error', err);
+          }
+        } else {
+          let serverErrorMsg = '';
+          try {
+            if (downloadResult && downloadResult.uri) {
+              const errorBody = await readAsStringAsync(downloadResult.uri);
+              try {
+                const parsed = JSON.parse(errorBody);
+                serverErrorMsg = parsed.error || parsed.message || errorBody;
+              } catch {
+                serverErrorMsg = errorBody.slice(0, 120);
+              }
+              await deleteAsync(downloadResult.uri, { idempotent: true });
+            }
+          } catch {}
+
+          Alert.alert(
+            'Download Failed ❌',
+            serverErrorMsg ? `Server error: ${serverErrorMsg}` : `Server returned status: ${downloadResult?.status || 'Unknown'}`
+          );
+        }
+      } catch (e: any) {
+        console.error(e);
+        if (downloadTasks.current[newDownload.id]) {
+          Alert.alert('Download Failed ❌', e.message || 'Unknown error');
+          delete downloadTasks.current[newDownload.id];
+          setActiveDownloads(prev => prev.filter(d => d.id !== newDownload.id));
+        }
       }
-    }
+    });
   };
 
   const handlePauseResume = async (id: string, isPaused: boolean) => {

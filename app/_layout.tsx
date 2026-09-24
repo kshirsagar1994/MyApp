@@ -7,11 +7,16 @@ import * as SplashScreen from 'expo-splash-screen';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { initializeAdMob } from '@/src/services/admob';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+
+  useEffect(() => {
+    initializeAdMob();
+  }, []);
 
   const onLayoutRootView = useCallback(() => {
     SplashScreen.hideAsync().catch(() => {});
