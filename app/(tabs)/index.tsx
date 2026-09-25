@@ -9,7 +9,7 @@ import { documentDirectory, createDownloadResumable, readAsStringAsync, deleteAs
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { showRewardedAdForDownload } from '@/src/services/admob';
+import { showRewardedAdForDownload, showInterstitialAdForExtract } from '@/src/services/admob';
 
 // ── PERFORMANCE: Memoized media option item — prevents all options from
 // re-rendering when download progress triggers activeDownloads state change
@@ -432,125 +432,129 @@ export default function HomeScreen() {
 
   const handleAnalyze = useCallback(async () => {
     if (!url) return;
-    setAnalyzing(true);
-    setResult(null);
 
-    const candidates: string[] = [];
+    // Show Interstitial Ad when user clicks to Extract Media
+    showInterstitialAdForExtract(async () => {
+      setAnalyzing(true);
+      setResult(null);
 
-    try {
-      // Load Instagram Cookies from AsyncStorage
-      let igCookies = '';
+      const candidates: string[] = [];
+
       try {
-        const storedCookies = await AsyncStorage.getItem('igCookies');
-        if (storedCookies) igCookies = storedCookies;
-      } catch {}
-
-      // Check for user-defined custom server URL
-      let userCustomUrl: string | null = null;
-      try {
-        userCustomUrl = await AsyncStorage.getItem('customBackendUrl');
-      } catch {}
-
-      if (userCustomUrl && userCustomUrl.trim()) {
-        candidates.push(userCustomUrl.trim().replace(/\/+$/, ''));
-      }
-
-      // If we previously connected to a working server, try it first
-      if (activeWorkingUrl && !candidates.includes(activeWorkingUrl)) {
-        candidates.push(activeWorkingUrl);
-      }
-
-      // Check local adb-reverse / local server
-      if (!candidates.includes('http://localhost:3000')) {
-        candidates.push('http://localhost:3000');
-      }
-
-      // Check Metro / LAN IP if available
-      const metroIp = getMetroHostIp();
-      if (metroIp && metroIp !== 'localhost' && metroIp !== '127.0.0.1') {
-        const lanUrl = `http://${metroIp}:3000`;
-        if (!candidates.includes(lanUrl)) {
-          candidates.push(lanUrl);
-        }
-      }
-
-      // Vercel serverless deployment
-      if (!candidates.includes(VERCEL_URL)) {
-        candidates.push(VERCEL_URL);
-      }
-
-      let successfulData: any = null;
-      let lastErrorMessage = '';
-
-      for (const candidateUrl of candidates) {
+        // Load Instagram Cookies from AsyncStorage
+        let igCookies = '';
         try {
-          const apiUrl = `${candidateUrl}/api/media/analyze`;
-          console.log('[Analyze] Trying endpoint:', apiUrl);
+          const storedCookies = await AsyncStorage.getItem('igCookies');
+          if (storedCookies) igCookies = storedCookies;
+        } catch {}
 
-          // Fast 4s timeout for local candidate probes so if local backend isn't up, it fails fast to Vercel
-          const isLocal = candidateUrl.includes('localhost') || candidateUrl.includes('127.0.0.1') || (metroIp && candidateUrl.includes(metroIp));
-          const probeTimeoutMs = isLocal ? 4000 : 60000;
+        // Check for user-defined custom server URL
+        let userCustomUrl: string | null = null;
+        try {
+          userCustomUrl = await AsyncStorage.getItem('customBackendUrl');
+        } catch {}
 
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), probeTimeoutMs);
+        if (userCustomUrl && userCustomUrl.trim()) {
+          candidates.push(userCustomUrl.trim().replace(/\/+$/, ''));
+        }
 
-          const res = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, igCookies }),
-            signal: controller.signal,
-          });
-          clearTimeout(timeoutId);
+        // If we previously connected to a working server, try it first
+        if (activeWorkingUrl && !candidates.includes(activeWorkingUrl)) {
+          candidates.push(activeWorkingUrl);
+        }
 
-          if (res) {
-            const responseText = await res.text();
-            let data: any = null;
-            try {
-              data = JSON.parse(responseText);
-            } catch {
-              console.warn(`[Analyze] Candidate ${candidateUrl} returned non-JSON response`);
-            }
+        // Check local adb-reverse / local server
+        if (!candidates.includes('http://localhost:3000')) {
+          candidates.push('http://localhost:3000');
+        }
 
-            if (data && data.status === 'success' && data.data) {
-              successfulData = data.data;
-              setActiveServerUrl(candidateUrl);
-              console.log('[Analyze] Successfully extracted media using:', candidateUrl);
-              break;
-            } else if (data && data.message) {
-              lastErrorMessage = data.message;
-              console.warn(`[Analyze] Candidate ${candidateUrl} failed with:`, data.message);
-            }
+        // Check Metro / LAN IP if available
+        const metroIp = getMetroHostIp();
+        if (metroIp && metroIp !== 'localhost' && metroIp !== '127.0.0.1') {
+          const lanUrl = `http://${metroIp}:3000`;
+          if (!candidates.includes(lanUrl)) {
+            candidates.push(lanUrl);
           }
-        } catch (err: any) {
-          console.warn(`[Analyze] Candidate ${candidateUrl} connection error:`, err.message);
-          if (!lastErrorMessage) lastErrorMessage = err.message;
+        }
+
+        // Vercel serverless deployment
+        if (!candidates.includes(VERCEL_URL)) {
+          candidates.push(VERCEL_URL);
+        }
+
+        let successfulData: any = null;
+        let lastErrorMessage = '';
+
+        for (const candidateUrl of candidates) {
+          try {
+            const apiUrl = `${candidateUrl}/api/media/analyze`;
+            console.log('[Analyze] Trying endpoint:', apiUrl);
+
+            // Fast 4s timeout for local candidate probes so if local backend isn't up, it fails fast to Vercel
+            const isLocal = candidateUrl.includes('localhost') || candidateUrl.includes('127.0.0.1') || (metroIp && candidateUrl.includes(metroIp));
+            const probeTimeoutMs = isLocal ? 4000 : 60000;
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), probeTimeoutMs);
+
+            const res = await fetch(apiUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url, igCookies }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            if (res) {
+              const responseText = await res.text();
+              let data: any = null;
+              try {
+                data = JSON.parse(responseText);
+              } catch {
+                console.warn(`[Analyze] Candidate ${candidateUrl} returned non-JSON response`);
+              }
+
+              if (data && data.status === 'success' && data.data) {
+                successfulData = data.data;
+                setActiveServerUrl(candidateUrl);
+                console.log('[Analyze] Successfully extracted media using:', candidateUrl);
+                break;
+              } else if (data && data.message) {
+                lastErrorMessage = data.message;
+                console.warn(`[Analyze] Candidate ${candidateUrl} failed with:`, data.message);
+              }
+            }
+          } catch (err: any) {
+            console.warn(`[Analyze] Candidate ${candidateUrl} connection error:`, err.message);
+            if (!lastErrorMessage) lastErrorMessage = err.message;
+          }
+        }
+
+        if (!successfulData) {
+          throw new Error(lastErrorMessage || 'Extraction failed across all backend servers. Please check the URL or your connection.');
+        }
+
+        // Pass the igCookies down to the download handler by embedding it in the result
+        setResult({
+          ...successfulData,
+          platform: platformInfo.platform,
+          options: successfulData.options?.map((opt: any) => ({ ...opt, igCookies }))
+        });
+        setAnalyzing(false);
+      } catch (error: any) {
+        setAnalyzing(false);
+        if (error.name === 'AbortError') {
+          Alert.alert('Timeout', 'The server took too long to respond.\n\nMake sure:\n1. Backend server is running (npm run backend)\n2. Run "npm run reverse" if using USB');
+        } else if (error.message?.includes('Network request failed') || error.message?.includes('failed to respond')) {
+          Alert.alert(
+            'Connection Failed',
+            `Cannot reach backend server.\n\nTried:\n${candidates.join('\n')}\n\nTroubleshooting tips:\n1. Ensure backend is running: npm run backend\n2. For USB devices, run: npm run reverse\n3. For Wi-Fi, ensure your phone and PC share the same Wi-Fi`
+          );
+        } else {
+          Alert.alert('Extraction Error', error.message);
         }
       }
-
-      if (!successfulData) {
-        throw new Error(lastErrorMessage || 'Extraction failed across all backend servers. Please check the URL or your connection.');
-      }
-
-      // Pass the igCookies down to the download handler by embedding it in the result
-      setResult({
-        ...successfulData,
-        platform: platformInfo.platform,
-        options: successfulData.options?.map((opt: any) => ({ ...opt, igCookies }))
-      });
-      setAnalyzing(false);
-    } catch (error: any) {
-      setAnalyzing(false);
-      if (error.name === 'AbortError') {
-        Alert.alert('Timeout', 'The server took too long to respond.\n\nMake sure:\n1. Backend server is running (npm run backend)\n2. Run "npm run reverse" if using USB');
-      } else if (error.message?.includes('Network request failed') || error.message?.includes('failed to respond')) {
-        Alert.alert(
-          'Connection Failed',
-          `Cannot reach backend server.\n\nTried:\n${candidates.join('\n')}\n\nTroubleshooting tips:\n1. Ensure backend is running: npm run backend\n2. For USB devices, run: npm run reverse\n3. For Wi-Fi, ensure your phone and PC share the same Wi-Fi`
-        );
-      } else {
-        Alert.alert('Extraction Error', error.message);
-      }
-    }
+    });
   }, [url, platformInfo]);
 
   return (

@@ -15,14 +15,12 @@ export const AD_UNIT_IDS = {
   BANNER: __DEV__ ? TestIds.BANNER : TestIds.BANNER,
 };
 
+// ==================== REWARDED AD MANAGEMENT ====================
 let rewardedAdInstance: RewardedAd | null = null;
 let isRewardedAdLoaded = false;
 let isLoadingRewardedAd = false;
 let rewardedAdUnsubscribeFunctions: (() => void)[] = [];
 
-/**
- * Clean up existing rewarded ad listeners
- */
 function cleanupRewardedListeners() {
   rewardedAdUnsubscribeFunctions.forEach(unsubscribe => {
     try { unsubscribe(); } catch {}
@@ -48,12 +46,13 @@ export function preloadRewardedAd() {
     const unsubscribeLoaded = rewardedAdInstance.addAdEventListener(RewardedAdEventType.LOADED, () => {
       isRewardedAdLoaded = true;
       isLoadingRewardedAd = false;
+      console.log('[AdMob] Rewarded Ad successfully loaded and ready.');
     });
 
     const unsubscribeError = rewardedAdInstance.addAdEventListener(AdEventType.ERROR, (error) => {
       isRewardedAdLoaded = false;
       isLoadingRewardedAd = false;
-      console.warn('AdMob Rewarded Ad load error:', error);
+      console.warn('[AdMob] Rewarded Ad load error:', error);
     });
 
     rewardedAdUnsubscribeFunctions.push(unsubscribeLoaded, unsubscribeError);
@@ -61,18 +60,18 @@ export function preloadRewardedAd() {
   } catch (err) {
     isLoadingRewardedAd = false;
     isRewardedAdLoaded = false;
-    console.warn('Failed to create Rewarded Ad:', err);
+    console.warn('[AdMob] Failed to create Rewarded Ad:', err);
   }
 }
 
 /**
  * Show a rewarded ad before executing the download action.
- * If the ad is ready, it shows the ad and runs `onProceed` upon completion.
+ * If the ad is ready, it displays the ad and proceeds with download on completion/reward.
  * If the ad is not ready, it proceeds directly to the download so the user is never blocked.
  */
 export async function showRewardedAdForDownload(onProceed: () => void) {
   if (Platform.OS === 'web' || !rewardedAdInstance || !isRewardedAdLoaded) {
-    // If ad is not ready yet, proceed with download and start preloading next ad
+    // Ad not ready or on web -> proceed immediately and preload for next time
     onProceed();
     preloadRewardedAd();
     return;
@@ -83,7 +82,6 @@ export async function showRewardedAdForDownload(onProceed: () => void) {
     if (!hasProceeded) {
       hasProceeded = true;
       onProceed();
-      // Preload next rewarded ad for future downloads
       isRewardedAdLoaded = false;
       preloadRewardedAd();
     }
@@ -103,63 +101,124 @@ export async function showRewardedAdForDownload(onProceed: () => void) {
       proceedOnce();
     });
 
-    const unsubscribeError = rewardedAdInstance.addAdEventListener(AdEventType.ERROR, () => {
+    const unsubscribeError = rewardedAdInstance.addAdEventListener(AdEventType.ERROR, (err) => {
+      console.warn('[AdMob] Rewarded Ad display error:', err);
       proceedOnce();
     });
 
     rewardedAdUnsubscribeFunctions.push(unsubscribeEarned, unsubscribeClosed, unsubscribeError);
     await rewardedAdInstance.show();
   } catch (e) {
-    console.warn('Error displaying Rewarded Ad:', e);
+    console.warn('[AdMob] Error displaying Rewarded Ad:', e);
     proceedOnce();
   }
 }
 
+// ==================== INTERSTITIAL AD MANAGEMENT ====================
+let interstitialAdInstance: InterstitialAd | null = null;
+let isInterstitialAdLoaded = false;
+let isLoadingInterstitialAd = false;
+let interstitialAdUnsubscribeFunctions: (() => void)[] = [];
+
+function cleanupInterstitialListeners() {
+  interstitialAdUnsubscribeFunctions.forEach(unsubscribe => {
+    try { unsubscribe(); } catch {}
+  });
+  interstitialAdUnsubscribeFunctions = [];
+}
+
 /**
- * Initialize Google Mobile Ads SDK and start preloading ads
+ * Preload an interstitial ad into memory
+ */
+export function preloadInterstitialAd() {
+  if (Platform.OS === 'web') return;
+  if (isLoadingInterstitialAd || isInterstitialAdLoaded) return;
+
+  isLoadingInterstitialAd = true;
+  cleanupInterstitialListeners();
+
+  try {
+    interstitialAdInstance = InterstitialAd.createForAdRequest(AD_UNIT_IDS.INTERSTITIAL, {
+      requestNonPersonalizedAdsOnly: false,
+    });
+
+    const unsubscribeLoaded = interstitialAdInstance.addAdEventListener(AdEventType.LOADED, () => {
+      isInterstitialAdLoaded = true;
+      isLoadingInterstitialAd = false;
+      console.log('[AdMob] Interstitial Ad successfully loaded and ready.');
+    });
+
+    const unsubscribeError = interstitialAdInstance.addAdEventListener(AdEventType.ERROR, (error) => {
+      isInterstitialAdLoaded = false;
+      isLoadingInterstitialAd = false;
+      console.warn('[AdMob] Interstitial Ad load error:', error);
+    });
+
+    interstitialAdUnsubscribeFunctions.push(unsubscribeLoaded, unsubscribeError);
+    interstitialAdInstance.load();
+  } catch (err) {
+    isLoadingInterstitialAd = false;
+    isInterstitialAdLoaded = false;
+    console.warn('[AdMob] Failed to create Interstitial Ad:', err);
+  }
+}
+
+/**
+ * Show an Interstitial Ad when user clicks to Extract Media.
+ * If the ad is ready, displays the ad and proceeds with extraction when closed.
+ * If the ad is not ready, proceeds with extraction immediately without blocking the user.
+ */
+export async function showInterstitialAdForExtract(onProceed: () => void) {
+  if (Platform.OS === 'web' || !interstitialAdInstance || !isInterstitialAdLoaded) {
+    // Ad not ready or on web -> proceed immediately with extraction and preload next ad
+    onProceed();
+    preloadInterstitialAd();
+    return;
+  }
+
+  let hasProceeded = false;
+  const proceedOnce = () => {
+    if (!hasProceeded) {
+      hasProceeded = true;
+      onProceed();
+      isInterstitialAdLoaded = false;
+      preloadInterstitialAd();
+    }
+  };
+
+  try {
+    cleanupInterstitialListeners();
+
+    const unsubscribeClosed = interstitialAdInstance.addAdEventListener(AdEventType.CLOSED, () => {
+      proceedOnce();
+    });
+
+    const unsubscribeError = interstitialAdInstance.addAdEventListener(AdEventType.ERROR, (err) => {
+      console.warn('[AdMob] Interstitial Ad display error:', err);
+      proceedOnce();
+    });
+
+    interstitialAdUnsubscribeFunctions.push(unsubscribeClosed, unsubscribeError);
+    await interstitialAdInstance.show();
+  } catch (e) {
+    console.warn('[AdMob] Error displaying Interstitial Ad:', e);
+    proceedOnce();
+  }
+}
+
+// ==================== INITIALIZATION ====================
+/**
+ * Initialize Google Mobile Ads SDK and start preloading both Rewarded and Interstitial ads
  */
 export async function initializeAdMob() {
   if (Platform.OS === 'web') return;
   try {
     const status = await mobileAds().initialize();
+    console.log('[AdMob] Initialized successfully');
     preloadRewardedAd();
+    preloadInterstitialAd();
     return status;
   } catch (error) {
-    console.warn('Failed to initialize Google Mobile Ads:', error);
+    console.warn('[AdMob] Failed to initialize Google Mobile Ads:', error);
   }
-}
-
-/**
- * Helper to create and load an Interstitial Ad
- */
-export function createInterstitialAd(onClosed?: () => void) {
-  if (Platform.OS === 'web') {
-    return { show: () => { if (onClosed) onClosed(); }, cleanup: () => {} };
-  }
-
-  const interstitial = InterstitialAd.createForAdRequest(AD_UNIT_IDS.INTERSTITIAL, {
-    requestNonPersonalizedAdsOnly: false,
-  });
-
-  const unsubscribeLoaded = interstitial.addAdEventListener(AdEventType.LOADED, () => {});
-
-  const unsubscribeClosed = interstitial.addAdEventListener(AdEventType.CLOSED, () => {
-    if (onClosed) onClosed();
-  });
-
-  interstitial.load();
-
-  return {
-    show: () => {
-      if (interstitial.loaded) {
-        interstitial.show();
-      } else {
-        if (onClosed) onClosed();
-      }
-    },
-    cleanup: () => {
-      unsubscribeLoaded();
-      unsubscribeClosed();
-    },
-  };
 }
